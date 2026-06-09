@@ -14,13 +14,9 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from framework.active_arc.headless_trial import create_trial_session
 from framework.active_arc.query_noise import maybe_corrupt_query_output
-from framework.active_arc.verifier_selection import (
-    iter_eligible_tasks,
-    list_valid_verifiers,
-    pick_random_verifier,
-    sample_consistent_dynamic_pair,
-)
+from framework.active_arc.verifier_selection import list_valid_verifiers
 from framework.dimensions.classification_distribution import VerifierSlot
 from framework.grids import Grid, GridPair, clone_grid, is_equal_grid, validate_grid
 from framework.tasks.base import ArcTask, Verifier
@@ -65,6 +61,12 @@ def _parse_cli() -> argparse.Namespace:
         type=int,
         default=None,
         help="RNG seed for task/verifier selection and trials.",
+    )
+    p.add_argument(
+        "--task-id",
+        type=str,
+        default=None,
+        help="ARC task id (e.g. 8eb1be9a); omit for a random eligible task.",
     )
     return p.parse_known_args()[0]
 
@@ -194,58 +196,46 @@ def _init_trial(args: argparse.Namespace, *, seed_override: Optional[int] = None
         if seed_override is not None
         else (args.seed if args.seed is not None else random.randint(1, 2**31 - 1))
     )
-    rng = random.Random(seed)
 
     hot_start, noisy_science, re_trials = _feature_flags(args)
-
     noise_p = float(args.noise_probability)
-    if noisy_science:
-        noise_p = max(0.05, min(0.20, noise_p))
 
-    task_id: Optional[str] = None
-    task: Optional[ArcTask] = None
-    slot = None
-    verifier: Optional[Verifier] = None
-    test_pair: Optional[GridPair] = None
-
-    for tid, t in iter_eligible_tasks(rng):
-        picked = pick_random_verifier(t, rng)
-        if picked is None:
-            continue
-        sl, ver = picked
-        tp = sample_consistent_dynamic_pair(t, ver, rng)
-        if tp is None:
-            continue
-        task_id, task, slot, verifier, test_pair = tid, t, sl, ver, tp
-        break
-
-    if task_id is None or task is None or verifier is None or test_pair is None or slot is None:
-        st.error(
-            "Could not build a trial: no task with a validated verifier and a matching "
-            "ARC-GEN dynamic test pair."
+    try:
+        session = create_trial_session(
+            seed=seed,
+            task_id=args.task_id,
+            hot_start=hot_start,
+            noisy_science=noisy_science,
+            re_trials=re_trials,
+            noise_probability=noise_p,
         )
+    except ValueError as e:
+        st.error(str(e))
+        st.stop()
+    except RuntimeError as e:
+        st.error(str(e))
         st.stop()
 
-    hot: Optional[GridPair] = None
-    if hot_start and task.train_pairs:
-        hot = copy.deepcopy(rng.choice(task.train_pairs))
+    verifier: Optional[Verifier] = None
+    for slot, vfn in session.valid_verifiers:
+        if slot == session.verifier_slot:
+            verifier = vfn
+            break
 
-    valid_list = list_valid_verifiers(task)
-    n_valid = len(valid_list)
-
-    st.session_state.trial_seed = seed
-    st.session_state.rng = rng
-    st.session_state.hot_start = hot_start
-    st.session_state.noisy_science = noisy_science
-    st.session_state.re_trials = re_trials
-    st.session_state.noise_probability = noise_p if noisy_science else 0.0
-    st.session_state.task_id = task_id
-    st.session_state.task = task
-    st.session_state.verifier_slot = slot
+    st.session_state.trial_seed = session.seed
+    st.session_state.rng = session.rng
+    st.session_state.hot_start = session.hot_start
+    st.session_state.noisy_science = session.noisy_science
+    st.session_state.re_trials = session.re_trials
+    st.session_state.noise_probability = session.noise_probability
+    st.session_state.task_id = session.task_id
+    st.session_state.task = session.task
+    st.session_state.verifier_slot = session.verifier_slot
     st.session_state.verifier = verifier
-    st.session_state.valid_verifiers = valid_list
-    st.session_state.hot_start_pair = hot
-    st.session_state.test_pair = test_pair
+    st.session_state.valid_verifiers = session.valid_verifiers
+    st.session_state.hot_start_pair = session.hot_start_pair
+    st.session_state.test_pair = session.test_pair
+    n_valid = len(session.valid_verifiers)
     st.session_state.phase = "explore"
     st.session_state.query_count = 0
     st.session_state.history = []
@@ -671,7 +661,7 @@ def main() -> None:
             st.rerun()
         st.markdown(
             "Restart the app to change feature flags (`--hot-start`, `--noisy-science`, `--re-trials`), "
-            "`--noise-probability`, or `--seed`. Legacy `--mode` still works as a single-feature alias."
+            "`--noise-probability`, `--task-id`, or `--seed`. Legacy `--mode` still works as a single-feature alias."
         )
 
     phase: Phase = st.session_state.phase

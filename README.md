@@ -25,6 +25,9 @@ streamlit run interface/active_arc_app.py -- --re-trials
 # Fixed RNG for task/verifier selection
 streamlit run interface/active_arc_app.py -- --seed 42
 
+# Pin a specific ARC task (needs a validated verifier + ARC-GEN dynamic pair)
+streamlit run interface/active_arc_app.py -- --task-id 8eb1be9a --seed 42
+
 # Combine features
 streamlit run interface/active_arc_app.py -- --hot-start --noisy-science --re-trials --seed 42
 ```

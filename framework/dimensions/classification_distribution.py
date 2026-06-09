@@ -51,8 +51,8 @@ def _sample_category(rng: random.Random, allowed: Sequence[Category]) -> Categor
     return c
 
 
-def verifier_matches_train_test_stable_dynamic50(task: ArcTask, v: Verifier) -> bool:
-    """True if *v* matches train, test, ARC-GEN stable (if any), and 50 dynamic pairs."""
+def verifier_matches_fixed_examples(task: ArcTask, v: Verifier) -> bool:
+    """True if *v* matches train, public test, and ARC-GEN stable pairs (when present)."""
     for p in task.train_pairs:
         try:
             out = v(copy.deepcopy(p.input))
@@ -76,13 +76,12 @@ def verifier_matches_train_test_stable_dynamic50(task: ArcTask, v: Verifier) -> 
                 return False
             if not is_equal_grid(out, p.output):
                 return False
-    if task.arc_gen_generator is None:
-        return False
-    try:
-        dyn = task.arc_gen_generator(50)
-    except Exception:
-        return False
-    for p in dyn:
+    return True
+
+
+def verifier_matches_dynamic_pairs(v: Verifier, pairs: Sequence[GridPair]) -> bool:
+    """True if *v* matches every labeled pair in *pairs*."""
+    for p in pairs:
         try:
             out = v(copy.deepcopy(p.input))
         except Exception:
@@ -92,8 +91,54 @@ def verifier_matches_train_test_stable_dynamic50(task: ArcTask, v: Verifier) -> 
     return True
 
 
+def verifier_matches_train_test_stable_dynamic50(
+    task: ArcTask,
+    v: Verifier,
+    *,
+    dynamic_pairs: Optional[Sequence[GridPair]] = None,
+) -> bool:
+    """True if *v* matches train, test, ARC-GEN stable (if any), and 50 dynamic pairs."""
+    if not verifier_matches_fixed_examples(task, v):
+        return False
+    if task.arc_gen_generator is None:
+        return False
+    if dynamic_pairs is None:
+        try:
+            dynamic_pairs = task.arc_gen_generator(50)
+        except Exception:
+            return False
+    return verifier_matches_dynamic_pairs(v, dynamic_pairs)
+
+
+def valid_verifier_slots_for_task(task: ArcTask) -> List[VerifierSlot]:
+    """Every verifier slot that passes :func:`verifier_matches_train_test_stable_dynamic50`.
+
+    Used for offline CSV generation (see ``caller_export_valid_verifiers.py``).
+    """
+    candidates: List[Tuple[VerifierSlot, Optional[Verifier]]] = [
+        ("re_arc", task.verifier),
+        ("google", task.secondary_verifier),
+        ("keymoon", task.tertiary_verifier),
+        ("neurips", task.quaternary_verifier),
+        ("custom", task.quinary_verifier),
+    ]
+    out: List[VerifierSlot] = []
+    for name, fn in candidates:
+        if fn is None:
+            continue
+        if verifier_matches_train_test_stable_dynamic50(task, fn):
+            out.append(name)
+    return out
+
+
 def select_verifier_for_task(task: ArcTask) -> Tuple[VerifierSlot, Verifier] | None:
     """First verifier in priority order that passes train / test / stable / dynamic50."""
+    if task.arc_gen_generator is None:
+        return None
+    try:
+        dynamic_pairs = task.arc_gen_generator(50)
+    except Exception:
+        return None
     candidates: List[Tuple[VerifierSlot, Optional[Verifier]]] = [
         ("re_arc", task.verifier),
         ("google", task.secondary_verifier),
@@ -104,7 +149,9 @@ def select_verifier_for_task(task: ArcTask) -> Tuple[VerifierSlot, Verifier] | N
     for name, fn in candidates:
         if fn is None:
             continue
-        if verifier_matches_train_test_stable_dynamic50(task, fn):
+        if verifier_matches_train_test_stable_dynamic50(
+            task, fn, dynamic_pairs=dynamic_pairs
+        ):
             return name, fn
     return None
 

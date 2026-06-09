@@ -4,6 +4,7 @@ import importlib.util
 import itertools
 import json
 import random
+import zipfile
 from collections import defaultdict
 import sys
 import warnings
@@ -622,15 +623,16 @@ def _load_golf_verifier_from_neurips(task_id: str) -> Optional[Callable[[Grid], 
     if not path.exists():
         return None
 
-    spec = importlib.util.spec_from_file_location(f"cg_solutions_{task_id}", path)
-    if spec is None or spec.loader is None:
+    try:
+        spec = importlib.util.spec_from_file_location(f"cg_solutions_{task_id}", path)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            spec.loader.exec_module(module)
+    except Exception:
         return None
-    module = importlib.util.module_from_spec(spec)
-    # Some golfed solutions trigger SyntaxWarning on import under certain
-    # Python versions. We don't want these warnings to spam the UI.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", SyntaxWarning)
-        spec.loader.exec_module(module)
 
     solve_fn = getattr(module, "solve", None)
     if callable(solve_fn):
@@ -662,13 +664,16 @@ def _load_golf_verifier_from_google_code_golf_2025(
     if not path.exists():
         return None
 
-    spec = importlib.util.spec_from_file_location(f"google_code_golf_{task_id}", path)
-    if spec is None or spec.loader is None:
+    try:
+        spec = importlib.util.spec_from_file_location(f"google_code_golf_{task_id}", path)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            spec.loader.exec_module(module)
+    except Exception:
         return None
-    module = importlib.util.module_from_spec(spec)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", SyntaxWarning)
-        spec.loader.exec_module(module)
 
     solve_fn = getattr(module, "solve", None)
     if callable(solve_fn):
@@ -685,7 +690,13 @@ def _load_golf_verifier_from_google_code_golf_2025(
 
 
 def _load_golf_verifier_from_keymoon(task_id: str) -> Optional[Callable[[Grid], Grid]]:
-    """Best-effort loader from `external/golf` (key-moon/golf)."""
+    """Best-effort loader from `external/golf` (key-moon/golf).
+
+    Tries, in order:
+
+    1. ``sols/taskNNN.py`` (layout from a full clone).
+    2. ``submission.zip`` with a top-level ``taskNNN.py`` (bundled snapshot).
+    """
     root = ROOT_DIR / "external" / "golf"
     if not root.exists():
         return None
@@ -695,21 +706,43 @@ def _load_golf_verifier_from_keymoon(task_id: str) -> Optional[Callable[[Grid], 
         return None
     task_num, _generator = lookup
 
-    # key-moon/golf stores solutions under `sols/taskNNN.py`.
-    sols_dir = root / "sols"
-    if not sols_dir.exists():
-        return None
-    path = sols_dir / f"task{task_num:03d}.py"
-    if not path.exists():
+    py_name = f"task{task_num:03d}.py"
+
+    def _decode_source(raw: bytes) -> str | None:
+        for enc in ("utf-8", "cp1252", "latin-1"):
+            try:
+                return raw.decode(enc)
+            except UnicodeDecodeError:
+                continue
         return None
 
-    spec = importlib.util.spec_from_file_location(f"golf_keymoon_{task_id}", path)
-    if spec is None or spec.loader is None:
+    sols_dir = root / "sols"
+    path = sols_dir / py_name
+    source: str | None = None
+    if path.is_file():
+        source = _decode_source(path.read_bytes())
+    else:
+        zip_path = root / "submission.zip"
+        if zip_path.is_file():
+            with zipfile.ZipFile(zip_path) as zf:
+                try:
+                    raw = zf.read(py_name)
+                except KeyError:
+                    raw = None
+                if raw is not None:
+                    source = _decode_source(raw)
+    if source is None:
         return None
-    module = importlib.util.module_from_spec(spec)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", SyntaxWarning)
-        spec.loader.exec_module(module)
+
+    mod_name = f"golf_keymoon_{task_id}"
+    module = ModuleType(mod_name)
+    qual = f"<{mod_name} {py_name}>"
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            exec(compile(source, qual, "exec"), module.__dict__)
+    except Exception:
+        return None
 
     solve_fn = getattr(module, "solve", None)
     if callable(solve_fn):
@@ -723,6 +756,24 @@ def _load_golf_verifier_from_keymoon(task_id: str) -> Optional[Callable[[Grid], 
             return attr  # type: ignore[return-value]
 
     return None
+
+
+def _mark_alternative_verifiers_loaded(task: ArcTask) -> None:
+    task._alts_loaded = True  # type: ignore[attr-defined]
+
+
+def _alternative_verifiers_loaded(task: ArcTask) -> bool:
+    return bool(getattr(task, "_alts_loaded", False))
+
+
+def _safe_load_verifier(
+    loader: Callable[[str], Optional[Callable[[Grid], Grid]]],
+    task_id: str,
+) -> Optional[Callable[[Grid], Grid]]:
+    try:
+        return loader(task_id)
+    except Exception:
+        return None
 
 
 def _load_alternative_verifiers(
@@ -741,14 +792,49 @@ def _load_alternative_verifiers(
     - NeurIPS-Code-Golf-2025 (`external/NeurIPS-Code-Golf-2025/solutions`)
     - custom local verifiers (`framework/custom_verifiers`)
     """
-    v2 = _load_golf_verifier_from_google_code_golf_2025(task_id)
-    v3 = _load_golf_verifier_from_keymoon(task_id)
-    v4 = _load_golf_verifier_from_neurips(task_id)
+    v2 = _safe_load_verifier(_load_golf_verifier_from_google_code_golf_2025, task_id)
+    v3 = _safe_load_verifier(_load_golf_verifier_from_keymoon, task_id)
+    v4 = _safe_load_verifier(_load_golf_verifier_from_neurips, task_id)
     v5 = get_custom_verifier(task_id)
     return v2, v3, v4, v5
 
 
-def load_task(task_id: str) -> ArcTask:
+def ensure_verifier_slot(task: ArcTask, slot: str) -> None:
+    """Load a single alternative verifier slot onto *task* if not already present."""
+    if slot == "re_arc":
+        return
+    tid = task.task_id
+    if slot == "google" and task.secondary_verifier is None:
+        task.secondary_verifier = _safe_load_verifier(
+            _load_golf_verifier_from_google_code_golf_2025, tid
+        )
+    elif slot == "keymoon" and task.tertiary_verifier is None:
+        task.tertiary_verifier = _safe_load_verifier(_load_golf_verifier_from_keymoon, tid)
+    elif slot == "neurips" and task.quaternary_verifier is None:
+        task.quaternary_verifier = _safe_load_verifier(_load_golf_verifier_from_neurips, tid)
+    elif slot == "custom" and task.quinary_verifier is None:
+        task.quinary_verifier = get_custom_verifier(tid)
+
+
+def ensure_verifier_slots(task: ArcTask, slots: Iterable[str]) -> None:
+    """Load only the listed verifier slots (re_arc is always present from load_task)."""
+    for slot in slots:
+        ensure_verifier_slot(task, slot)
+
+
+def ensure_alternative_verifiers(task: ArcTask) -> None:
+    """Load golf/custom verifiers onto *task* once (skipped if already loaded)."""
+    if _alternative_verifiers_loaded(task):
+        return
+    v2, v3, v4, v5 = _load_alternative_verifiers(task.task_id)
+    task.secondary_verifier = v2
+    task.tertiary_verifier = v3
+    task.quaternary_verifier = v4
+    task.quinary_verifier = v5
+    _mark_alternative_verifiers_loaded(task)
+
+
+def load_task(task_id: str, *, load_alternative_verifiers: bool = True) -> ArcTask:
     """Load a single ARC task by ID, with attached synthetic data and verifiers."""
     # Canonical ARC examples (including ground-truth test outputs).
     train_pairs, test_inputs, test_outputs = _load_arc_original(task_id)
@@ -763,11 +849,19 @@ def load_task(task_id: str) -> ArcTask:
 
     # Primary and alternative verifiers.
     verifier = get_re_arc_verifier(task_id)
-    secondary_verifier, tertiary_verifier, quaternary_verifier, quinary_verifier = (
-        _load_alternative_verifiers(task_id)
-    )
+    secondary_verifier: Optional[Callable[[Grid], Grid]] = None
+    tertiary_verifier: Optional[Callable[[Grid], Grid]] = None
+    quaternary_verifier: Optional[Callable[[Grid], Grid]] = None
+    quinary_verifier: Optional[Callable[[Grid], Grid]] = None
+    if load_alternative_verifiers:
+        (
+            secondary_verifier,
+            tertiary_verifier,
+            quaternary_verifier,
+            quinary_verifier,
+        ) = _load_alternative_verifiers(task_id)
 
-    return ArcTask(
+    task = ArcTask(
         task_id=task_id,
         train_pairs=train_pairs,
         test_inputs=test_inputs,
@@ -782,6 +876,9 @@ def load_task(task_id: str) -> ArcTask:
         re_arc_generator=re_arc_gen,
         arc_gen_generator=arc_gen_gen,
     )
+    if load_alternative_verifiers:
+        _mark_alternative_verifiers_loaded(task)
+    return task
 
 
 def iter_tasks(

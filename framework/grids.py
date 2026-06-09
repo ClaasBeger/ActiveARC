@@ -20,9 +20,12 @@ class GridPair:
 
 def is_equal_grid(a: Grid, b: Grid) -> bool:
     """Return True if two grids are structurally and element-wise equal."""
-    if len(a) != len(b):
+    try:
+        if len(a) != len(b):
+            return False
+        return all(row_a == row_b for row_a, row_b in zip(a, b))
+    except TypeError:
         return False
-    return all(row_a == row_b for row_a, row_b in zip(a, b))
 
 
 def cell_edit_distance_same_shape(a: Grid, b: Grid) -> int:

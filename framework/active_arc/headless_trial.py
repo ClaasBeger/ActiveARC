@@ -11,7 +11,6 @@ from framework.active_arc.query_noise import maybe_corrupt_query_output
 from framework.active_arc.verifier_selection import (
     iter_eligible_tasks,
     list_valid_verifiers,
-    pick_random_verifier,
     sample_consistent_dynamic_pair,
 )
 from framework.dimensions.classification_distribution import VerifierSlot
@@ -237,15 +236,14 @@ def create_trial_session(
     verifier: Optional[Verifier] = None
     test_pair: Optional[GridPair] = None
 
+    valid_list: Optional[List[Tuple[VerifierSlot, Verifier]]] = None
+
     if task_id is not None:
-        task = load_task(task_id)
+        task = load_task(task_id, load_alternative_verifiers=False)
         valid = list_valid_verifiers(task)
         if not valid:
             raise ValueError(f"No valid verifier for task {task_id!r}")
-        picked = pick_random_verifier(task, rng)
-        if picked is None:
-            raise ValueError(f"pick_random_verifier failed for {task_id!r}")
-        slot, verifier = picked
+        slot, verifier = rng.choice(valid)
         tp = sample_consistent_dynamic_pair(task, verifier, rng)
         if tp is None:
             raise ValueError(
@@ -253,25 +251,33 @@ def create_trial_session(
             )
         tid = task_id
         test_pair = tp
+        valid_list = valid
     else:
         for t_id, t in iter_eligible_tasks(rng):
-            picked = pick_random_verifier(t, rng)
-            if picked is None:
+            valid = list_valid_verifiers(t)
+            if not valid:
                 continue
-            sl, ver = picked
+            sl, ver = rng.choice(valid)
             tp = sample_consistent_dynamic_pair(t, ver, rng)
             if tp is None:
                 continue
             tid, task, slot, verifier, test_pair = t_id, t, sl, ver, tp
+            valid_list = valid
             break
 
-    if tid is None or task is None or slot is None or verifier is None or test_pair is None:
+    if (
+        tid is None
+        or task is None
+        or slot is None
+        or verifier is None
+        or test_pair is None
+        or valid_list is None
+    ):
         raise RuntimeError(
             "Could not build trial (need eligible task + dynamic pair). "
             "Try --task-id or check external data."
         )
 
-    valid_list = list_valid_verifiers(task)
     hot: Optional[GridPair] = None
     if hot_start and task.train_pairs:
         hot = copy.deepcopy(rng.choice(task.train_pairs))
