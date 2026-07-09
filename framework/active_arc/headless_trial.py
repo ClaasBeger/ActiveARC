@@ -66,6 +66,7 @@ class ActiveArcTrialSession:
     valid_verifiers: List[Tuple[VerifierSlot, Verifier]]
     hot_start_pair: Optional[GridPair]
     test_pair: GridPair
+    dataset: str = "arc"
     phase: Phase = "explore"
     query_count: int = 0
     history: List[Dict[str, Any]] = field(default_factory=list)
@@ -213,6 +214,83 @@ class ActiveArcTrialSession:
         }
 
 
+def _create_conceptarc_trial_inputs(
+    rng: random.Random,
+    task_id: Optional[str],
+) -> Tuple[
+    str,
+    ArcTask,
+    VerifierSlot,
+    Verifier,
+    GridPair,
+    List[Tuple[VerifierSlot, Verifier]],
+]:
+    """Pick a ConceptARC task + verifier + dynamic test pair (kept separate from ARC-AGI)."""
+    from framework.integrations.conceptarc_adapter import (
+        conceptarc_available,
+        list_conceptarc_task_ids,
+        load_conceptarc_task,
+    )
+
+    if not conceptarc_available():
+        raise RuntimeError(
+            "ConceptARC dataset unavailable: exported programs or the "
+            "ConceptARC-GEN package could not be found. See "
+            "framework/integrations/conceptarc_adapter.py."
+        )
+
+    def _fallback_test_pair(t: ArcTask, fn: Verifier) -> Optional[GridPair]:
+        """Use a held-out exported test example when the live generator can't sample one."""
+        n = min(len(t.test_inputs), len(t.test_outputs))
+        order = list(range(n))
+        rng.shuffle(order)
+        for i in order:
+            inp = t.test_inputs[i]
+            try:
+                if is_equal_grid(fn(copy.deepcopy(inp)), t.test_outputs[i]):
+                    return GridPair(copy.deepcopy(inp), copy.deepcopy(t.test_outputs[i]))
+            except Exception:
+                continue
+        return None
+
+    def _build(t: ArcTask) -> Optional[
+        Tuple[str, ArcTask, VerifierSlot, Verifier, GridPair, List[Tuple[VerifierSlot, Verifier]]]
+    ]:
+        fn = t.quinary_verifier or t.verifier
+        if fn is None:
+            return None
+        valid: List[Tuple[VerifierSlot, Verifier]] = [("custom", fn)]
+        tp = sample_consistent_dynamic_pair(t, fn, rng)
+        if tp is None:
+            tp = _fallback_test_pair(t, fn)
+        if tp is None:
+            return None
+        return t.task_id, t, "custom", fn, tp, valid
+
+    if task_id is not None:
+        task = load_conceptarc_task(task_id)
+        built = _build(task)
+        if built is None:
+            raise ValueError(
+                f"Could not build a ConceptARC trial for {task_id!r}; try another seed."
+            )
+        return built
+
+    ids = list(list_conceptarc_task_ids())
+    if not ids:
+        raise RuntimeError("No exported ConceptARC programs found.")
+    rng.shuffle(ids)
+    for cand in ids:
+        try:
+            task = load_conceptarc_task(cand)
+        except Exception:
+            continue
+        built = _build(task)
+        if built is not None:
+            return built
+    raise RuntimeError("Could not build a ConceptARC trial from any exported program.")
+
+
 def create_trial_session(
     *,
     seed: int,
@@ -221,8 +299,13 @@ def create_trial_session(
     noisy_science: bool = False,
     re_trials: bool = False,
     noise_probability: float = 0.12,
+    dataset: str = "arc",
 ) -> ActiveArcTrialSession:
-    """Build a trial matching the Streamlit app (random eligible task or fixed ``task_id``)."""
+    """Build a trial matching the Streamlit app (random eligible task or fixed ``task_id``).
+
+    ``dataset`` selects the task pool: ``"arc"`` (default, ARC-AGI original) or
+    ``"conceptarc"`` (ConceptARC DSL programs, kept fully separate).
+    """
     rng = random.Random(seed)
     noise_p = float(noise_probability)
     if noisy_science:
@@ -238,7 +321,11 @@ def create_trial_session(
 
     valid_list: Optional[List[Tuple[VerifierSlot, Verifier]]] = None
 
-    if task_id is not None:
+    if dataset == "conceptarc":
+        tid, task, slot, verifier, test_pair, valid_list = _create_conceptarc_trial_inputs(
+            rng, task_id
+        )
+    elif task_id is not None:
         task = load_task(task_id, load_alternative_verifiers=False)
         valid = list_valid_verifiers(task)
         if not valid:
@@ -291,6 +378,7 @@ def create_trial_session(
         valid_verifiers=valid_list,
         hot_start_pair=hot,
         test_pair=test_pair,
+        dataset=dataset,
         phase="explore",
         query_count=0,
         history=[],

@@ -17,6 +17,7 @@ if str(ROOT_DIR) not in sys.path:
 from framework.active_arc.headless_trial import create_trial_session
 from framework.active_arc.query_noise import maybe_corrupt_query_output
 from framework.active_arc.verifier_selection import list_valid_verifiers
+from framework.integrations.conceptarc_adapter import list_conceptarc_task_ids
 from framework.dimensions.classification_distribution import VerifierSlot
 from framework.grids import Grid, GridPair, clone_grid, is_equal_grid, validate_grid
 from framework.tasks.base import ArcTask, Verifier
@@ -31,8 +32,9 @@ def _parse_cli() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="ActiveARC query–test interface")
     p.add_argument(
         "--hot-start",
-        action="store_true",
-        help="Show one random training pair for free (no query cost). Combinable with other flags.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Show one random training pair for free (no query cost). On by default; use --no-hot-start to disable.",
     )
     p.add_argument(
         "--noisy-science",
@@ -66,7 +68,13 @@ def _parse_cli() -> argparse.Namespace:
         "--task-id",
         type=str,
         default=None,
-        help="ARC task id (e.g. 8eb1be9a); omit for a random eligible task.",
+        help="Task id (ARC: 8eb1be9a; ConceptARC: count/count11); omit for a random eligible task.",
+    )
+    p.add_argument(
+        "--dataset",
+        choices=["arc", "conceptarc"],
+        default="arc",
+        help="Task pool: arc (ARC-AGI original, default) or conceptarc (ConceptARC DSL programs).",
     )
     return p.parse_known_args()[0]
 
@@ -190,7 +198,14 @@ def _arc_column_config(df: pd.DataFrame) -> Dict[Any, Any]:
     }
 
 
-def _init_trial(args: argparse.Namespace, *, seed_override: Optional[int] = None) -> None:
+def _init_trial(
+    args: argparse.Namespace,
+    *,
+    seed_override: Optional[int] = None,
+    dataset_override: Optional[str] = None,
+    task_id_override: Optional[str] = None,
+    clear_task_id: bool = False,
+) -> None:
     seed = (
         seed_override
         if seed_override is not None
@@ -200,14 +215,23 @@ def _init_trial(args: argparse.Namespace, *, seed_override: Optional[int] = None
     hot_start, noisy_science, re_trials = _feature_flags(args)
     noise_p = float(args.noise_probability)
 
+    dataset = dataset_override or st.session_state.get("dataset") or args.dataset
+    if task_id_override is not None:
+        task_id = task_id_override
+    elif clear_task_id:
+        task_id = None
+    else:
+        task_id = args.task_id
+
     try:
         session = create_trial_session(
             seed=seed,
-            task_id=args.task_id,
+            task_id=task_id,
             hot_start=hot_start,
             noisy_science=noisy_science,
             re_trials=re_trials,
             noise_probability=noise_p,
+            dataset=dataset,
         )
     except ValueError as e:
         st.error(str(e))
@@ -222,6 +246,7 @@ def _init_trial(args: argparse.Namespace, *, seed_override: Optional[int] = None
             verifier = vfn
             break
 
+    st.session_state.dataset = session.dataset
     st.session_state.trial_seed = session.seed
     st.session_state.rng = session.rng
     st.session_state.hot_start = session.hot_start
@@ -635,7 +660,9 @@ def main() -> None:
         "<h1 style='text-align:center'>ActiveARC</h1>",
         unsafe_allow_html=True,
     )
+    _dataset_label = "ConceptARC" if st.session_state.get("dataset") == "conceptarc" else "ARC-AGI"
     st.caption(
+        f"Dataset: **{_dataset_label}** · "
         f"Features: **{_mode_caption(st.session_state.hot_start, st.session_state.noisy_science, st.session_state.re_trials)}** "
         f"· trial seed: `{st.session_state.trial_seed}` · "
         f"task: `{st.session_state.task_id}` · validated verifiers available: "
@@ -653,15 +680,68 @@ def main() -> None:
 
     with st.sidebar:
         st.markdown("### Session")
+
+        _dataset_options = ["arc", "conceptarc"]
+        _dataset_labels = {"arc": "ARC-AGI (original)", "conceptarc": "ConceptARC"}
+        _current_dataset = st.session_state.get("dataset", args.dataset)
+        _chosen_dataset = st.radio(
+            "Dataset",
+            _dataset_options,
+            index=_dataset_options.index(_current_dataset),
+            format_func=lambda d: _dataset_labels[d],
+            key="dataset_radio",
+            help="ConceptARC exposes ConceptARC DSL programs, kept separate from ARC-AGI.",
+        )
+        if _chosen_dataset != _current_dataset:
+            for k in list(st.session_state.keys()):
+                del st.session_state[k]
+            _init_trial(
+                args,
+                seed_override=random.randint(1, 2**31 - 1),
+                dataset_override=_chosen_dataset,
+                clear_task_id=_chosen_dataset != args.dataset,
+            )
+            st.rerun()
+
+        if st.session_state.get("dataset") == "conceptarc":
+            _task_ids = list(list_conceptarc_task_ids())
+            if _task_ids:
+                _current_task = st.session_state.get("task_id")
+                _idx = _task_ids.index(_current_task) if _current_task in _task_ids else 0
+                _chosen_task = st.selectbox(
+                    "ConceptARC task",
+                    _task_ids,
+                    index=_idx,
+                    key="conceptarc_task_select",
+                    help="Pick a specific ConceptARC program to run.",
+                )
+                if _chosen_task != _current_task:
+                    for k in list(st.session_state.keys()):
+                        del st.session_state[k]
+                    _init_trial(
+                        args,
+                        seed_override=random.randint(1, 2**31 - 1),
+                        dataset_override="conceptarc",
+                        task_id_override=_chosen_task,
+                    )
+                    st.rerun()
+
         if st.button("New trial (same CLI flags)"):
+            _keep_dataset = st.session_state.get("dataset", args.dataset)
             for k in list(st.session_state.keys()):
                 del st.session_state[k]
             new_seed = random.randint(1, 2**31 - 1)
-            _init_trial(args, seed_override=new_seed)
+            _init_trial(
+                args,
+                seed_override=new_seed,
+                dataset_override=_keep_dataset,
+                clear_task_id=_keep_dataset != args.dataset,
+            )
             st.rerun()
         st.markdown(
-            "Restart the app to change feature flags (`--hot-start`, `--noisy-science`, `--re-trials`), "
-            "`--noise-probability`, `--task-id`, or `--seed`. Legacy `--mode` still works as a single-feature alias."
+            "Use the **Dataset** selector above to switch between ARC-AGI and ConceptARC. "
+            "Restart the app to change feature flags (`--hot-start`/`--no-hot-start`, `--noisy-science`, "
+            "`--re-trials`), `--noise-probability`, `--task-id`, `--dataset`, or `--seed`."
         )
 
     phase: Phase = st.session_state.phase

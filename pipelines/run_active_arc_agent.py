@@ -26,7 +26,13 @@ from framework.prompting.active_arc_openai import run_openai_agent_loop
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="ActiveARC OpenAI agent (tool calling)")
-    p.add_argument("--task-id", type=str, default=None, help="ARC task id; omit for random eligible task.")
+    p.add_argument("--task-id", type=str, default=None, help="Task id (ARC: 8eb1be9a; ConceptARC: count/count11); omit for random eligible task.")
+    p.add_argument(
+        "--dataset",
+        choices=["arc", "conceptarc"],
+        default="arc",
+        help="Task pool: arc (ARC-AGI original, default) or conceptarc (ConceptARC DSL programs).",
+    )
     p.add_argument("--seed", type=int, default=0)
     p.add_argument(
         "--model",
@@ -58,6 +64,7 @@ def main() -> None:
         noisy_science=args.noisy_science,
         re_trials=args.re_trials,
         noise_probability=args.noise_probability,
+        dataset=args.dataset,
     )
     result = run_openai_agent_loop(
         session,
