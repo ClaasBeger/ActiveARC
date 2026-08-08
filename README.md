@@ -44,6 +44,20 @@ cd interface/arc_grid_component/frontend && npm install && npm run build
 
 ARC task **`8eb1be9a`** is a good example to try when experimenting with the interface and modes.
 
+## External ARC editor (`external/arc-app`)
+
+The optional Node editor under `external/arc-app` needs a MongoDB Atlas URI. Credentials are **not** stored in source; each developer keeps a local `external/arc-app/.env` (gitignored):
+
+```bash
+cd external/arc-app
+cp .env.example .env
+# set MONGODB_URI=... (ask a teammate / project lead for the shared URI)
+npm install
+npm run build && npm start
+```
+
+See [`external/arc-app/README.md`](external/arc-app/README.md) for full setup.
+
 ## ConceptARC dataset
 
 ActiveARC can also run trials over **ConceptARC** DSL programs, kept fully separate

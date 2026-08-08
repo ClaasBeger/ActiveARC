@@ -1,11 +1,55 @@
 # ARC editor
+
+External ARC problem editor / viewer under `external/arc-app`. The Express API talks to a shared MongoDB Atlas database.
+
 ## Installation
-1. Clone the ARC editor [here](https://github.com/victorvikram/arc-app): `git clone <url>`
-2. Install node.js if you don't already have it from [nodejs.org](nodejs.org)
-3. Run `npm install` from the root directory. This installs the packages necessary for the server.
-4. Open the client directory (`cd client`) and run `npm install`. This installs the packages necessary for the client.
+
+1. Install [Node.js](https://nodejs.org/) if needed.
+2. From this directory (`external/arc-app`), install server deps:
+
+   ```bash
+   npm install
+   ```
+
+3. Install client deps:
+
+   ```bash
+   cd client && npm install && cd ..
+   ```
+
+## MongoDB credentials (`MONGODB_URI`)
+
+The server **no longer hardcodes** the database password. Set `MONGODB_URI` in a local `.env` file (gitignored):
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env` and set:
+
+```bash
+MONGODB_URI=mongodb+srv://USER:PASSWORD@HOST/DB?retryWrites=true&w=majority
+PORT=3001
+```
+
+Ask a teammate or the project lead for the shared Atlas URI (the same one previously embedded in `server/index.js`). **Do not commit `.env`.**
+
+Without `MONGODB_URI`, `npm start` exits with an error.
 
 ## To run
-1. The easiest way to run it is to open the client directory and run `npm start` from there. A browser window should open automatically with the ARC editor.
-2.  If you want to run the front end concurrently with the server (this is necessary if you need the database functionality), then from the root directory, run `npm run build`. Once that is complete (still from the root directory, run `npm start`.
 
+**Client only** (no DB):
+
+```bash
+cd client && npm start
+```
+
+**Client + API** (needed for database-backed categories/problems):
+
+```bash
+# from external/arc-app
+npm run build
+npm start
+```
+
+The API listens on `PORT` (default `3001`).

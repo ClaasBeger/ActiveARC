@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const express = require('express');
 const bodyParser = require('body-parser')
 const MongoClient = require('mongodb').MongoClient
@@ -13,8 +15,12 @@ app.use(cors());
 
 const PORT = process.env.PORT || 3001;
 
+const connectionString = process.env.MONGODB_URI;
+if (!connectionString) {
+    console.error('MONGODB_URI is required. Set it in the environment or a local .env file (see .env.example).');
+    process.exit(1);
+}
 
-const connectionString = "mongodb+srv://victorodouard:ObAm1942a@problemcluster.sj2gw.mongodb.net/myFirstDatabase?retryWrites=true&w=majority"
 MongoClient.connect(connectionString, (err, client) => {
 
     if (err) return console.error(err)
