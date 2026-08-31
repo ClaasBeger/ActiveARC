@@ -106,9 +106,11 @@ PYTHONPATH="$(pwd)/external/ARC-GEN" .venv/bin/python export_to_activearc.py \
 
 ## Slippage pair search (ARC-AGI-1)
 
-Offline search for **narrow vs broad** verifier pairs used by slippage experiments
-(no UI yet). Broad = ``re_arc``; narrow = golf/custom slots that still pass the
-ARC-GEN distribution but fail on a majority of RE-ARC samples:
+Offline search for **narrow vs broad** pairs used by slippage experiments
+(no UI yet). Broad = ``re_arc`` (must cover the narrow distribution: train +
+test + ARC-GEN stable/dynamic); narrow = golf/custom slots that also cover that
+distribution but fail on ≥50% of RE-ARC stable samples (broad must pass all
+scored RE-ARC stable):
 
 ```bash
 python -m pipelines.find_slippage_pairs \

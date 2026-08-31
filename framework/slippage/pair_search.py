@@ -1,15 +1,16 @@
-"""Slippage pair search: narrow vs broad (RE-ARC) verifiers on ARC-AGI-1.
+"""Slippage pair search: narrow vs broad (RE-ARC) on ARC-AGI-1.
 
 A **slippage pair** for a task is:
 
-* **broad** — the ``re_arc`` verifier, which already passes the ARC-GEN
-  distribution (train / test / ARC-GEN stable / ARC-GEN dynamic50), and
-* **narrow** — another valid verifier slot (``google`` / ``keymoon`` /
-  ``neurips`` / ``custom``) that also passes that ARC-GEN distribution, but
-  **fails on a majority** of RE-ARC samples.
+* **broad** (``re_arc``) — covers the *narrow* example distribution: original
+  train + test, plus ARC-GEN stable and dynamic samples (CSV-valid on that
+  suite). This is the broad verifier/generator source used at test time.
+* **narrow** (``google`` / ``keymoon`` / ``neurips`` / ``custom``) — also
+  CSV-valid on that same narrow distribution (a previously valid hypothesis),
+  but fails on a large fraction of RE-ARC samples (``>=`` majority threshold).
 
-These pairs are candidates for on-the-fly adaptation experiments: a hypothesis
-valid on the narrow (ARC-GEN-like) support may break under broader RE-ARC inputs.
+These pairs support on-the-fly adaptation experiments: a hypothesis that works
+on ARC-GEN-like support may break under broader RE-ARC inputs.
 """
 
 from __future__ import annotations
@@ -114,7 +115,11 @@ def _select_re_arc_pairs(task: ArcTask, max_pairs: int) -> List[GridPair]:
 
 
 def candidate_task_ids(*, csv_path: Path | None = None) -> List[str]:
-    """Tasks whose CSV lists ``re_arc`` plus at least one narrow slot."""
+    """Tasks whose CSV lists ``re_arc`` plus at least one narrow slot.
+
+    CSV validity means the slot passes train + test + ARC-GEN stable + dynamic50
+    (the narrow example distribution).
+    """
     path = csv_path if csv_path is not None else default_verifiers_csv_path()
     out: List[str] = []
     for tid in eligible_task_ids_from_csv(path):
@@ -129,7 +134,6 @@ def find_slippage_pairs_for_task(
     *,
     max_re_arc_pairs: int = 200,
     majority_threshold: float = 0.5,
-    max_broad_fail_rate: float = 0.1,
     pair_timeout_s: float = 0.5,
     csv_path: Path | None = None,
 ) -> List[SlippagePair]:
@@ -138,10 +142,8 @@ def find_slippage_pairs_for_task(
     Args:
       task_id: ARC-AGI-1 training task id.
       max_re_arc_pairs: Cap on RE-ARC pairs used for fail-rate scoring.
-      majority_threshold: Narrow must fail strictly more than this fraction
-          of RE-ARC pairs (default: majority = ``> 0.5``).
-      max_broad_fail_rate: Broad (RE-ARC) verifier must fail at most this
-          fraction of the scored RE-ARC pairs (sanity check).
+      majority_threshold: Narrow must fail at least this fraction of RE-ARC
+          pairs (default ``>= 0.5``).
       pair_timeout_s: Per-example verifier wall-clock timeout (counts as fail).
       csv_path: Optional override for ``task_valid_verifiers.csv``.
     """
@@ -165,11 +167,13 @@ def find_slippage_pairs_for_task(
     if not re_pairs:
         return []
 
+    # Informational only: broad is gated by CSV on the narrow distribution,
+    # not by RE-ARC success.
     broad_fails = _score_fail_count(
         broad_fn, re_pairs, pair_timeout_s=pair_timeout_s
     )
     broad_rate = broad_fails / len(re_pairs)
-    if broad_rate > max_broad_fail_rate:
+    if broad_fails > 0:
         return []
 
     n_stable = len(task.arc_gen_synthetic_pairs or [])
@@ -183,7 +187,7 @@ def find_slippage_pairs_for_task(
             narrow_fn, re_pairs, pair_timeout_s=pair_timeout_s
         )
         narrow_rate = narrow_fails / len(re_pairs)
-        if narrow_rate <= majority_threshold:
+        if narrow_rate < majority_threshold:
             continue
         pairs_out.append(
             SlippagePair(
@@ -208,7 +212,6 @@ def find_slippage_pairs(
     *,
     max_re_arc_pairs: int = 200,
     majority_threshold: float = 0.5,
-    max_broad_fail_rate: float = 0.1,
     pair_timeout_s: float = 0.5,
     csv_path: Path | None = None,
     progress: bool = True,
@@ -227,7 +230,6 @@ def find_slippage_pairs(
                 tid,
                 max_re_arc_pairs=max_re_arc_pairs,
                 majority_threshold=majority_threshold,
-                max_broad_fail_rate=max_broad_fail_rate,
                 pair_timeout_s=pair_timeout_s,
                 csv_path=csv_path,
             )

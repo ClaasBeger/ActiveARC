@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Find and save ARC-AGI-1 slippage pairs (narrow verifier vs RE-ARC broad).
+"""Find and save ARC-AGI-1 slippage pairs (narrow vs RE-ARC broad).
 
-A pair qualifies when both verifiers are CSV-valid on the ARC-GEN distribution
-(train / test / ARC-GEN stable / dynamic50), the broad slot is ``re_arc``, and
-the narrow slot fails on a majority of scored RE-ARC samples while ``re_arc``
-still mostly succeeds on those same samples.
+A pair qualifies when:
+
+* **broad** (``re_arc``) is CSV-valid on the narrow distribution — original
+  train + test, ARC-GEN stable, and ARC-GEN dynamic50;
+* **narrow** (google / keymoon / neurips / custom) is also CSV-valid on that
+  same distribution, but fails on ``>=`` majority of scored RE-ARC samples
+  (default 50%).
 
 Example::
 
     python -m pipelines.find_slippage_pairs \\
         --out experiments/slippage/slippage_pairs.json \\
-        --max-re-arc-pairs 200
+        --max-re-arc-pairs 100
 
     # Quick smoke on a few tasks:
     python -m pipelines.find_slippage_pairs --num-tasks 20 --out /tmp/slippage_smoke.json
@@ -53,13 +56,7 @@ def _parse_args() -> argparse.Namespace:
         "--majority-threshold",
         type=float,
         default=0.5,
-        help="Narrow fail rate must be strictly greater than this (default 0.5).",
-    )
-    p.add_argument(
-        "--max-broad-fail-rate",
-        type=float,
-        default=0.1,
-        help="RE-ARC verifier may fail at most this fraction of scored RE-ARC pairs.",
+        help="Narrow fail rate on RE-ARC samples must be >= this (default 0.5).",
     )
     p.add_argument(
         "--num-tasks",
@@ -103,8 +100,7 @@ def main() -> None:
     print(
         f"Scanning {len(ids)} candidate tasks "
         f"(max_re_arc_pairs={args.max_re_arc_pairs}, "
-        f"majority>{args.majority_threshold}, "
-        f"broad_fail≤{args.max_broad_fail_rate}, "
+        f"narrow_fail≥{args.majority_threshold}, "
         f"pair_timeout={args.pair_timeout}s)",
         flush=True,
     )
@@ -113,7 +109,6 @@ def main() -> None:
         ids,
         max_re_arc_pairs=args.max_re_arc_pairs,
         majority_threshold=args.majority_threshold,
-        max_broad_fail_rate=args.max_broad_fail_rate,
         pair_timeout_s=args.pair_timeout,
         csv_path=csv_path,
         progress=not args.quiet,
@@ -125,14 +120,14 @@ def main() -> None:
         "n_candidates_scanned": len(ids),
         "max_re_arc_pairs": args.max_re_arc_pairs,
         "majority_threshold": args.majority_threshold,
-        "max_broad_fail_rate": args.max_broad_fail_rate,
         "pair_timeout_s": args.pair_timeout,
         "broad_slot": "re_arc",
         "narrow_slots": ["google", "keymoon", "neurips", "custom"],
         "criterion": (
-            "Both slots CSV-valid on ARC-GEN train/test/stable/dynamic50; "
-            "narrow fail_rate on RE-ARC samples > majority_threshold; "
-            "re_arc fail_rate on those samples ≤ max_broad_fail_rate."
+            "Broad (re_arc) and narrow slots are both CSV-valid on the narrow "
+            "distribution (train + test + ARC-GEN stable + ARC-GEN dynamic50). "
+            "Broad must pass 100% of scored RE-ARC stable samples. "
+            "Narrow fail_rate on those samples >= majority_threshold."
         ),
     }
     out = save_slippage_pairs(pairs, args.out, meta=meta)
