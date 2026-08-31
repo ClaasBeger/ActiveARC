@@ -65,19 +65,28 @@ from the ARC-AGI pool. Choose the pool with `--dataset` (or the **Dataset** sele
 in the sidebar); ARC-AGI stays the default:
 
 ```bash
-# Random ConceptARC program
+# Random ConceptARC program (from the exported catalog)
 streamlit run interface/active_arc_app.py -- --dataset conceptarc
 
 # A specific ConceptARC program (ids are <concept>/<task>, e.g. count/count11, copy/copy12)
 streamlit run interface/active_arc_app.py -- --dataset conceptarc --task-id count/count11
+
+# Sample a brand-new DSL task family online (ConceptARC-GEN layer 3)
+streamlit run interface/active_arc_app.py -- --dataset conceptarc --task-id sample
+streamlit run interface/active_arc_app.py -- --dataset conceptarc --task-id count/sample
+# equivalent:
+streamlit run interface/active_arc_app.py -- --dataset conceptarc --sample-family
 ```
 
 The same `--dataset conceptarc` flag works for the headless agent runner
 (`pipelines/run_active_arc_agent.py`) and `create_trial_session(..., dataset="conceptarc")`.
+Pass `sample_family=True` or a `task_id` of `sample` / `<concept>/sample` to invent a
+new program at trial time; optional `persist_sampled_family=True` writes it into the
+exported catalog.
 
 Exported programs live under `external/conceptarc/programs/<concept>/<task>.json`
-(five concepts: count, center, insideoutside, abovebelow, copy). Official tasks
-1–10 reuse the ConceptARC corpus examples; generated families >10 ship three
+(16 concepts × 15 families = 240 programs: official 1–10 plus generated 11–15).
+Official tasks reuse the ConceptARC corpus examples; generated families ship three
 freshly generated examples plus a held-out test pool. The live query verifier and
 the dynamic test generator are rebuilt from each program via the `conceptarc_gen`
 package, imported from `CONCEPTARC_GEN_ROOT` (default: the sibling
@@ -88,6 +97,41 @@ module).
 To (re)generate the exported programs, run from the ConceptARC-GEN repo root:
 
 ```bash
+# Optional: invent more families (writes output/conceptarc_specs/<concept>/<task>11+.json)
+python conceptarc_gen_tasks.py --concept_name count --num_task_families 5 --seed 42
+
 PYTHONPATH="$(pwd)/external/ARC-GEN" .venv/bin/python export_to_activearc.py \
     --out /path/to/ActiveARC/external/conceptarc/programs
 ```
+
+## Slippage pair search (ARC-AGI-1)
+
+Offline search for **narrow vs broad** verifier pairs used by slippage experiments
+(no UI yet). Broad = ``re_arc``; narrow = golf/custom slots that still pass the
+ARC-GEN distribution but fail on a majority of RE-ARC samples:
+
+```bash
+python -m pipelines.find_slippage_pairs \
+    --out experiments/slippage/slippage_pairs.json \
+    --max-re-arc-pairs 100
+```
+
+Results land in `experiments/slippage/slippage_pairs.json`.
+
+## P-ARC dataset
+
+ActiveARC can also run trials over **P-ARC** (`t1`–`t50`), kept separate from
+ARC-AGI and ConceptARC:
+
+```bash
+# Random P-ARC task
+streamlit run interface/active_arc_app.py -- --dataset parc
+
+# Pin a task (ids: test2_t1 … test2_t50, or short forms t1 … t50)
+streamlit run interface/active_arc_app.py -- --dataset parc --task-id test2_t1
+```
+
+Each task uses its own `verifier.py` / `generator.py`, with the committed 50-pair
+stable pool as a fallback when live generation fails. Data is resolved from
+`PARC_ROOT` / `TEST2_DIR`, then `external/Test2`, then the sibling checkout
+`../../PotARCin/PotARCin/Test2`.

@@ -73,6 +73,9 @@ class ArcTask:
     re_arc_generator: Optional[Callable[[int], List[GridPair]]] = None
     arc_gen_generator: Optional[Callable[[int], List[GridPair]]] = None
 
+    # P-ARC (Test2) committed stable pool from ``t<n>_samples_50.json``.
+    p_arc_stable_pairs: Optional[List[GridPair]] = None
+
     # Which evaluation dimensions this task meaningfully supports.
     dimensions: Sequence[DimensionName] = field(
         default_factory=lambda: tuple(DimensionName)

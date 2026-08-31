@@ -214,7 +214,7 @@ class ActiveArcTrialSession:
         }
 
 
-def _create_conceptarc_trial_inputs(
+def _create_parc_trial_inputs(
     rng: random.Random,
     task_id: Optional[str],
 ) -> Tuple[
@@ -225,11 +225,98 @@ def _create_conceptarc_trial_inputs(
     GridPair,
     List[Tuple[VerifierSlot, Verifier]],
 ]:
+    """Pick a P-ARC task + verifier + dynamic/stable test pair."""
+    from framework.tasks.parc_dataset import (
+        list_parc_task_ids,
+        load_parc_task,
+        parc_available,
+    )
+
+    if not parc_available():
+        raise RuntimeError(
+            "P-ARC dataset unavailable: data not found. Set PARC_ROOT/TEST2_DIR "
+            "or keep the sibling PotARCin/PotARCin/Test2 checkout "
+            "(see framework/tasks/parc_dataset.py)."
+        )
+
+    def _fallback_stable_or_test(t: ArcTask, fn: Verifier) -> Optional[GridPair]:
+        pools: List[GridPair] = []
+        if t.p_arc_stable_pairs:
+            pools.extend(t.p_arc_stable_pairs)
+        n = min(len(t.test_inputs), len(t.test_outputs))
+        for i in range(n):
+            pools.append(GridPair(t.test_inputs[i], t.test_outputs[i]))
+        order = list(range(len(pools)))
+        rng.shuffle(order)
+        for i in order:
+            pair = pools[i]
+            try:
+                if is_equal_grid(fn(copy.deepcopy(pair.input)), pair.output):
+                    return GridPair(copy.deepcopy(pair.input), copy.deepcopy(pair.output))
+            except Exception:
+                continue
+        return None
+
+    def _build(t: ArcTask) -> Optional[
+        Tuple[str, ArcTask, VerifierSlot, Verifier, GridPair, List[Tuple[VerifierSlot, Verifier]]]
+    ]:
+        fn = t.quinary_verifier or t.verifier
+        if fn is None:
+            return None
+        valid: List[Tuple[VerifierSlot, Verifier]] = [("custom", fn)]
+        tp = sample_consistent_dynamic_pair(t, fn, rng)
+        if tp is None:
+            tp = _fallback_stable_or_test(t, fn)
+        if tp is None:
+            return None
+        return t.task_id, t, "custom", fn, tp, valid
+
+    if task_id is not None:
+        task = load_parc_task(task_id)
+        built = _build(task)
+        if built is None:
+            raise ValueError(
+                f"Could not build a P-ARC trial for {task_id!r}; try another seed."
+            )
+        return built
+
+    ids = list(list_parc_task_ids())
+    if not ids:
+        raise RuntimeError("No P-ARC tasks found.")
+    rng.shuffle(ids)
+    for cand in ids:
+        try:
+            task = load_parc_task(cand)
+        except Exception:
+            continue
+        built = _build(task)
+        if built is not None:
+            return built
+    raise RuntimeError("Could not build a P-ARC trial from any available task.")
+
+
+def _create_conceptarc_trial_inputs(
+    rng: random.Random,
+    task_id: Optional[str],
+    *,
+    sample_family: bool = False,
+    persist_sampled_family: bool = False,
+) -> Tuple[
+    str,
+    ArcTask,
+    VerifierSlot,
+    Verifier,
+    GridPair,
+    List[Tuple[VerifierSlot, Verifier]],
+]:
     """Pick a ConceptARC task + verifier + dynamic test pair (kept separate from ARC-AGI)."""
     from framework.integrations.conceptarc_adapter import (
+        concept_from_sample_request,
         conceptarc_available,
+        is_conceptarc_sample_request,
         list_conceptarc_task_ids,
         load_conceptarc_task,
+        sample_conceptarc_task,
     )
 
     if not conceptarc_available():
@@ -267,6 +354,26 @@ def _create_conceptarc_trial_inputs(
             return None
         return t.task_id, t, "custom", fn, tp, valid
 
+    want_sample = sample_family or is_conceptarc_sample_request(task_id)
+    if want_sample:
+        concept = (
+            concept_from_sample_request(task_id)
+            if task_id is not None and is_conceptarc_sample_request(task_id)
+            else None
+        )
+        task = sample_conceptarc_task(
+            concept=concept,
+            seed=rng.randint(1, 2**31 - 1),
+            persist=persist_sampled_family,
+        )
+        built = _build(task)
+        if built is None:
+            raise ValueError(
+                "Could not build a ConceptARC trial from a newly sampled family; "
+                "try another seed."
+            )
+        return built
+
     if task_id is not None:
         task = load_conceptarc_task(task_id)
         built = _build(task)
@@ -300,11 +407,18 @@ def create_trial_session(
     re_trials: bool = False,
     noise_probability: float = 0.12,
     dataset: str = "arc",
+    sample_family: bool = False,
+    persist_sampled_family: bool = False,
 ) -> ActiveArcTrialSession:
     """Build a trial matching the Streamlit app (random eligible task or fixed ``task_id``).
 
-    ``dataset`` selects the task pool: ``"arc"`` (default, ARC-AGI original) or
-    ``"conceptarc"`` (ConceptARC DSL programs, kept fully separate).
+    ``dataset`` selects the task pool: ``"arc"`` (default, ARC-AGI original),
+    ``"conceptarc"`` (ConceptARC DSL programs), or ``"parc"`` (P-ARC).
+
+    For ConceptARC, ``sample_family=True`` or ``task_id`` of the form ``sample``,
+    ``sample/<concept>``, or ``<concept>/sample`` invents a new DSL task family
+    online. ``persist_sampled_family`` writes that family into the exported
+    program catalog (and ConceptARC-GEN specs).
     """
     rng = random.Random(seed)
     noise_p = float(noise_probability)
@@ -323,6 +437,13 @@ def create_trial_session(
 
     if dataset == "conceptarc":
         tid, task, slot, verifier, test_pair, valid_list = _create_conceptarc_trial_inputs(
+            rng,
+            task_id,
+            sample_family=sample_family,
+            persist_sampled_family=persist_sampled_family,
+        )
+    elif dataset == "parc":
+        tid, task, slot, verifier, test_pair, valid_list = _create_parc_trial_inputs(
             rng, task_id
         )
     elif task_id is not None:

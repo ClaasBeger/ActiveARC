@@ -26,12 +26,22 @@ from framework.prompting.active_arc_openai import run_openai_agent_loop
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="ActiveARC OpenAI agent (tool calling)")
-    p.add_argument("--task-id", type=str, default=None, help="Task id (ARC: 8eb1be9a; ConceptARC: count/count11); omit for random eligible task.")
+    p.add_argument("--task-id", type=str, default=None, help="Task id (ARC: 8eb1be9a; ConceptARC: count/count11 or sample; P-ARC: test2_t1); omit for random eligible task.")
     p.add_argument(
         "--dataset",
-        choices=["arc", "conceptarc"],
+        choices=["arc", "conceptarc", "parc"],
         default="arc",
-        help="Task pool: arc (ARC-AGI original, default) or conceptarc (ConceptARC DSL programs).",
+        help="Task pool: arc (default), conceptarc, or parc (P-ARC).",
+    )
+    p.add_argument(
+        "--sample-family",
+        action="store_true",
+        help="ConceptARC only: sample a new DSL task family online.",
+    )
+    p.add_argument(
+        "--persist-sampled-family",
+        action="store_true",
+        help="ConceptARC only: persist a newly sampled family into the exported catalog.",
     )
     p.add_argument("--seed", type=int, default=0)
     p.add_argument(
@@ -65,6 +75,8 @@ def main() -> None:
         re_trials=args.re_trials,
         noise_probability=args.noise_probability,
         dataset=args.dataset,
+        sample_family=args.sample_family,
+        persist_sampled_family=args.persist_sampled_family,
     )
     result = run_openai_agent_loop(
         session,

@@ -18,6 +18,7 @@ from framework.active_arc.headless_trial import create_trial_session
 from framework.active_arc.query_noise import maybe_corrupt_query_output
 from framework.active_arc.verifier_selection import list_valid_verifiers
 from framework.integrations.conceptarc_adapter import list_conceptarc_task_ids
+from framework.tasks.parc_dataset import list_parc_task_ids
 from framework.dimensions.classification_distribution import VerifierSlot
 from framework.grids import Grid, GridPair, clone_grid, is_equal_grid, validate_grid
 from framework.tasks.base import ArcTask, Verifier
@@ -68,13 +69,30 @@ def _parse_cli() -> argparse.Namespace:
         "--task-id",
         type=str,
         default=None,
-        help="Task id (ARC: 8eb1be9a; ConceptARC: count/count11); omit for a random eligible task.",
+        help=(
+            "Task id (ARC: 8eb1be9a; ConceptARC: count/count11; P-ARC: test2_t1 or t1). "
+            "ConceptARC also accepts sample, sample/<concept>, or <concept>/sample "
+            "to invent a new DSL family online."
+        ),
     )
     p.add_argument(
         "--dataset",
-        choices=["arc", "conceptarc"],
+        choices=["arc", "conceptarc", "parc"],
         default="arc",
-        help="Task pool: arc (ARC-AGI original, default) or conceptarc (ConceptARC DSL programs).",
+        help=(
+            "Task pool: arc (ARC-AGI original, default), conceptarc (ConceptARC DSL), "
+            "or parc (P-ARC)."
+        ),
+    )
+    p.add_argument(
+        "--sample-family",
+        action="store_true",
+        help="ConceptARC only: sample a new DSL task family online (same as --task-id sample).",
+    )
+    p.add_argument(
+        "--persist-sampled-family",
+        action="store_true",
+        help="ConceptARC only: write a newly sampled family into the exported program catalog.",
     )
     return p.parse_known_args()[0]
 
@@ -126,6 +144,9 @@ def _bump_query_editor() -> None:
 def _bump_test_editor() -> None:
     """Increment nonce so the test answer editor remounts after programmatic grid changes."""
     st.session_state.test_editor_nonce = int(st.session_state.get("test_editor_nonce", 0)) + 1
+    # One-shot: ignore the remounted widget's first return so it cannot overwrite
+    # the Python-assigned grid (Streamlit custom components often echo defaults).
+    st.session_state._test_editor_force_grid = True
 
 
 def _default_query_editor_blank() -> None:
@@ -232,6 +253,8 @@ def _init_trial(
             re_trials=re_trials,
             noise_probability=noise_p,
             dataset=dataset,
+            sample_family=bool(getattr(args, "sample_family", False)),
+            persist_sampled_family=bool(getattr(args, "persist_sampled_family", False)),
         )
     except ValueError as e:
         st.error(str(e))
@@ -558,12 +581,16 @@ def _test_phase() -> None:
     th, tw = len(ti), len(ti[0]) if ti else 1
     st.session_state.test_h = th
     st.session_state.test_w = tw
-    st.session_state.test_answer_grid = _resize_grid(st.session_state.test_answer_grid, th, tw)
 
     if st.button("Copy test input to answer grid", key="btn_copy_test_to_answer", use_container_width=True):
         st.session_state.test_answer_grid = _normalize_grid_cells(clone_grid(ti))
+        st.session_state.test_h = th
+        st.session_state.test_w = tw
         _bump_test_editor()
         st.rerun()
+
+    # Resize only when not mid-copy; keep programmatic copies intact.
+    st.session_state.test_answer_grid = _resize_grid(st.session_state.test_answer_grid, th, tw)
 
     _tnonce = int(st.session_state.get("test_editor_nonce", 0))
     if arc_grid_editor_available():
@@ -572,8 +599,10 @@ def _test_phase() -> None:
             st.session_state.test_answer_grid,
             key=f"test_arc_grid_{_tnonce}",
         )
-        if edited_t is not None:
+        # Ignore stale returns from a remounted editor right after a programmatic bump.
+        if edited_t is not None and not st.session_state.get("_test_editor_force_grid"):
             st.session_state.test_answer_grid = _normalize_grid_cells(clone_grid(edited_t))
+        st.session_state._test_editor_force_grid = False
     else:
         st.markdown("**Your predicted output** (table editor)")
         df = _df_from_grid(st.session_state.test_answer_grid)
@@ -585,7 +614,9 @@ def _test_phase() -> None:
             column_config=_arc_column_config(df),
             key=f"test_editor_{_tnonce}",
         )
-        st.session_state.test_answer_grid = _grid_from_df(edited)
+        if not st.session_state.get("_test_editor_force_grid"):
+            st.session_state.test_answer_grid = _grid_from_df(edited)
+        st.session_state._test_editor_force_grid = False
 
     if st.button("Submit final answer", type="primary"):
         pred = _normalize_grid_cells(clone_grid(st.session_state.test_answer_grid))
@@ -660,7 +691,14 @@ def main() -> None:
         "<h1 style='text-align:center'>ActiveARC</h1>",
         unsafe_allow_html=True,
     )
-    _dataset_label = "ConceptARC" if st.session_state.get("dataset") == "conceptarc" else "ARC-AGI"
+    _dataset_names = {
+        "arc": "ARC-AGI",
+        "conceptarc": "ConceptARC",
+        "parc": "P-ARC",
+    }
+    _dataset_label = _dataset_names.get(
+        st.session_state.get("dataset", "arc"), "ARC-AGI"
+    )
     st.caption(
         f"Dataset: **{_dataset_label}** · "
         f"Features: **{_mode_caption(st.session_state.hot_start, st.session_state.noisy_science, st.session_state.re_trials)}** "
@@ -681,16 +719,22 @@ def main() -> None:
     with st.sidebar:
         st.markdown("### Session")
 
-        _dataset_options = ["arc", "conceptarc"]
-        _dataset_labels = {"arc": "ARC-AGI (original)", "conceptarc": "ConceptARC"}
+        _dataset_options = ["arc", "conceptarc", "parc"]
+        _dataset_labels = {
+            "arc": "ARC-AGI (original)",
+            "conceptarc": "ConceptARC",
+            "parc": "P-ARC",
+        }
         _current_dataset = st.session_state.get("dataset", args.dataset)
+        if _current_dataset not in _dataset_options:
+            _current_dataset = "arc"
         _chosen_dataset = st.radio(
             "Dataset",
             _dataset_options,
             index=_dataset_options.index(_current_dataset),
             format_func=lambda d: _dataset_labels[d],
             key="dataset_radio",
-            help="ConceptARC exposes ConceptARC DSL programs, kept separate from ARC-AGI.",
+            help="ARC-AGI original, ConceptARC DSL programs, or P-ARC (t1–t50).",
         )
         if _chosen_dataset != _current_dataset:
             for k in list(st.session_state.keys()):
@@ -705,17 +749,35 @@ def main() -> None:
 
         if st.session_state.get("dataset") == "conceptarc":
             _task_ids = list(list_conceptarc_task_ids())
+            _current_task = st.session_state.get("task_id")
+            _current_concept = (
+                str(_current_task).split("/", 1)[0]
+                if _current_task and "/" in str(_current_task)
+                else None
+            )
+            _menu_prev = st.session_state.get("conceptarc_menu_choice")
+
             if _task_ids:
-                _current_task = st.session_state.get("task_id")
-                _idx = _task_ids.index(_current_task) if _current_task in _task_ids else 0
+                if _current_task in _task_ids:
+                    _menu_default = _current_task
+                elif _menu_prev in _task_ids:
+                    _menu_default = _menu_prev
+                elif _current_concept:
+                    _same = [t for t in _task_ids if t.startswith(_current_concept + "/")]
+                    _menu_default = _same[0] if _same else _task_ids[0]
+                else:
+                    _menu_default = _task_ids[0]
+
                 _chosen_task = st.selectbox(
                     "ConceptARC task",
                     _task_ids,
-                    index=_idx,
+                    index=_task_ids.index(_menu_default),
                     key="conceptarc_task_select",
-                    help="Pick a specific ConceptARC program to run.",
+                    help="Pick an exported ConceptARC program (official 1–10 or generated 11+).",
                 )
-                if _chosen_task != _current_task:
+                # Only switch when the user actually changes the selectbox value.
+                # Do not treat "current trial is a sampled ephemeral id" as a change.
+                if _menu_prev is not None and _chosen_task != _menu_prev:
                     for k in list(st.session_state.keys()):
                         del st.session_state[k]
                     _init_trial(
@@ -724,7 +786,71 @@ def main() -> None:
                         dataset_override="conceptarc",
                         task_id_override=_chosen_task,
                     )
+                    st.session_state.conceptarc_menu_choice = _chosen_task
                     st.rerun()
+                st.session_state.conceptarc_menu_choice = _chosen_task
+            else:
+                _chosen_task = None
+
+            if st.button(
+                "Sample new family",
+                help=(
+                    "Invent a new DSL task family online for the concept of the "
+                    "currently selected task (ConceptARC-GEN layer 3)."
+                ),
+            ):
+                _anchor = st.session_state.get("conceptarc_menu_choice") or _chosen_task
+                _concept = None
+                if _anchor and "/" in str(_anchor):
+                    _concept = str(_anchor).split("/", 1)[0]
+                elif _current_concept:
+                    _concept = _current_concept
+                _sample_id = f"{_concept}/sample" if _concept else "sample"
+                for k in list(st.session_state.keys()):
+                    del st.session_state[k]
+                _init_trial(
+                    args,
+                    seed_override=random.randint(1, 2**31 - 1),
+                    dataset_override="conceptarc",
+                    task_id_override=_sample_id,
+                )
+                if _anchor:
+                    st.session_state.conceptarc_menu_choice = _anchor
+                st.rerun()
+
+        if st.session_state.get("dataset") == "parc":
+            _parc_ids = list(list_parc_task_ids())
+            if _parc_ids:
+                _current_parc = st.session_state.get("task_id")
+                _parc_idx = (
+                    _parc_ids.index(_current_parc)
+                    if _current_parc in _parc_ids
+                    else 0
+                )
+                _chosen_parc = st.selectbox(
+                    "P-ARC task",
+                    _parc_ids,
+                    index=_parc_idx,
+                    key="parc_task_select",
+                    help="P-ARC tasks t1–t50 (ids test2_t1 … test2_t50).",
+                )
+                _parc_ready = st.session_state.get("_parc_select_ready", False)
+                if _parc_ready and _chosen_parc != _current_parc:
+                    for k in list(st.session_state.keys()):
+                        del st.session_state[k]
+                    _init_trial(
+                        args,
+                        seed_override=random.randint(1, 2**31 - 1),
+                        dataset_override="parc",
+                        task_id_override=_chosen_parc,
+                    )
+                    st.rerun()
+                st.session_state._parc_select_ready = True
+            else:
+                st.warning(
+                    "P-ARC data not found. Set PARC_ROOT or keep "
+                    "PotARCin/PotARCin/Test2 as a sibling checkout."
+                )
 
         if st.button("New trial (same CLI flags)"):
             _keep_dataset = st.session_state.get("dataset", args.dataset)
