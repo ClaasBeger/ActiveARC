@@ -64,6 +64,11 @@ ActiveARC can also run trials over **ConceptARC** DSL programs, kept fully separ
 from the ARC-AGI pool. Choose the pool with `--dataset` (or the **Dataset** selector
 in the sidebar); ARC-AGI stays the default:
 
+> **Prerequisite:** ConceptARC needs the external `conceptarc_gen` package, which is
+> **not** bundled in this repo. It will be unavailable until you install it — see
+> [ConceptARC-GEN setup](#conceptarc-gen-setup) below. Without it, `--dataset conceptarc`
+> raises *"ConceptARC-GEN package not found"*.
+
 ```bash
 # Random ConceptARC program (from the exported catalog)
 streamlit run interface/active_arc_app.py -- --dataset conceptarc
@@ -87,12 +92,49 @@ exported catalog.
 Exported programs live under `external/conceptarc/programs/<concept>/<task>.json`
 (16 concepts × 15 families = 240 programs: official 1–10 plus generated 11–15).
 Official tasks reuse the ConceptARC corpus examples; generated families ship three
-freshly generated examples plus a held-out test pool. The live query verifier and
-the dynamic test generator are rebuilt from each program via the `conceptarc_gen`
-package, imported from `CONCEPTARC_GEN_ROOT` (default: the sibling
-`../../ConceptARC-Generator/ConceptARC-GEN` checkout). ConceptARC requires Python 3.12
-and the ConceptARC-GEN repo's pinned `external/ARC-GEN` submodule (for the `common`
-module).
+freshly generated examples plus a held-out test pool.
+
+### ConceptARC-GEN setup
+
+The `external/conceptarc/programs/*.json` files committed here are only *data*. The
+live query verifier and the dynamic test generator are **rebuilt at runtime** from
+each program by importing the `conceptarc_gen` package. That package is a **separate
+repository** ([`PMMon/ConceptARC-GEN`](https://github.com/PMMon/ConceptARC-GEN)) and is
+**not** vendored in ActiveARC, so every ConceptARC trial (not just online sampling)
+needs it present locally.
+
+ConceptARC-GEN also depends on ARC-GEN's `common` module and the official ConceptARC
+corpus, both pinned as **git submodules** (`external/ARC-GEN`, `external/ConceptARC`),
+so you must clone it **with submodules**. ConceptARC requires **Python 3.12**.
+
+```bash
+# Clone ConceptARC-GEN WITH its submodules (external/ARC-GEN + external/ConceptARC)
+git clone --recurse-submodules git@github.com:PMMon/ConceptARC-GEN.git
+# If you already cloned it without submodules:
+#   cd ConceptARC-GEN && git submodule update --init --recursive
+
+# Install its deps under Python 3.12 (see the ConceptARC-GEN README)
+cd ConceptARC-GEN
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+ActiveARC resolves the `conceptarc_gen` checkout from the first of these that exists
+(a location counts only if it contains `conceptarc_gen/__init__.py`):
+
+1. **`CONCEPTARC_GEN_ROOT`** environment variable, if set:
+   ```bash
+   export CONCEPTARC_GEN_ROOT=/abs/path/to/ConceptARC-GEN
+   ```
+2. **Sibling checkout** at `<ActiveARC-repo>/../../ConceptARC-Generator/ConceptARC-GEN`
+   (e.g. for a repo at `.../SFI/ActiveARC/ActiveARC`, that is
+   `.../SFI/ConceptARC-Generator/ConceptARC-GEN`).
+3. **Vendored fallback** at `external/ConceptARC-GEN` inside this repo.
+
+Setting `CONCEPTARC_GEN_ROOT` is the most portable option; the sibling path is the
+zero-config default the code looks for.
+
+### (Re)generating the exported programs
 
 To (re)generate the exported programs, run from the ConceptARC-GEN repo root:
 
@@ -109,13 +151,14 @@ PYTHONPATH="$(pwd)/external/ARC-GEN" .venv/bin/python export_to_activearc.py \
 Offline search for **narrow vs broad** pairs used by slippage experiments
 (no UI yet). Broad = ``re_arc`` (must cover the narrow distribution: train +
 test + ARC-GEN stable/dynamic); narrow = golf/custom slots that also cover that
-distribution but fail on ≥50% of RE-ARC stable samples (broad must pass all
-scored RE-ARC stable):
+distribution but fail on ≥50% of RE-ARC stable + dynamic samples (broad must
+pass all scored RE-ARC):
 
 ```bash
 python -m pipelines.find_slippage_pairs \
     --out experiments/slippage/slippage_pairs.json \
-    --max-re-arc-pairs 100
+    --max-re-arc-pairs 1000 \
+    --max-re-arc-dynamic-pairs 50
 ```
 
 Results land in `experiments/slippage/slippage_pairs.json`.
