@@ -26,6 +26,10 @@ ARC_GEN_STABLE_ZIP = ROOT_DIR / "external" / "arc_gen_stable.zip"
 
 _ARC_GEN_TASK_LIST_MODULE: ModuleType | None = None
 
+# Private seed source for dynamic ARC-GEN generation: gives each generated example a
+# fresh seed without depending on (or disturbing) the global ``random`` state.
+_DYNAMIC_GEN_RNG = random.Random()
+
 
 def _load_arc_original(task_id: str) -> Tuple[List[GridPair], List[Grid], List[Grid]]:
     """Load canonical ARC train/test examples for a task from arc_original_train/.
@@ -581,30 +585,36 @@ def _make_arc_gen_generator(task_id: str) -> Optional[Callable[[int], List[GridP
 
     def gen(num_examples: int) -> List[GridPair]:
         pairs: List[GridPair] = []
-        if task_id == "a64e4611":
-            max_attempts = max(2000, num_examples * 120)
-            example_id = 0
-            attempts = 0
-            while len(pairs) < num_examples and attempts < max_attempts:
-                random.seed(task_num + example_id)
-                example = generator()
-                attempts += 1
-                example_id += 1
-                if not _arc_gen_a64e4611_example_is_unambiguous(example):
-                    continue
-                pairs.append(GridPair(example["input"], example["output"]))
-            if len(pairs) < num_examples:
-                raise RuntimeError(
-                    f"Custom ARC-GEN generator acceptance too low for {task_id!r}: "
-                    f"got {len(pairs)}/{num_examples} after {attempts} attempts"
-                )
-            return pairs
+        # ARC-GEN generators draw from the global ``random`` module. Seed it with a
+        # fresh value per example (so repeated calls — e.g. the consistency retry
+        # loop in sample_consistent_dynamic_pair — produce different pairs) and
+        # restore the caller's RNG state afterwards instead of clobbering it.
+        state = random.getstate()
+        try:
+            if task_id == "a64e4611":
+                max_attempts = max(2000, num_examples * 120)
+                attempts = 0
+                while len(pairs) < num_examples and attempts < max_attempts:
+                    random.seed(_DYNAMIC_GEN_RNG.randrange(2**63))
+                    example = generator()
+                    attempts += 1
+                    if not _arc_gen_a64e4611_example_is_unambiguous(example):
+                        continue
+                    pairs.append(GridPair(example["input"], example["output"]))
+                if len(pairs) < num_examples:
+                    raise RuntimeError(
+                        f"Custom ARC-GEN generator acceptance too low for {task_id!r}: "
+                        f"got {len(pairs)}/{num_examples} after {attempts} attempts"
+                    )
+                return pairs
 
-        for example_id in range(num_examples):
-            random.seed(task_num + example_id)
-            example = generator()
-            pairs.append(GridPair(example["input"], example["output"]))
-        return pairs
+            for _ in range(num_examples):
+                random.seed(_DYNAMIC_GEN_RNG.randrange(2**63))
+                example = generator()
+                pairs.append(GridPair(example["input"], example["output"]))
+            return pairs
+        finally:
+            random.setstate(state)
 
     return gen
 

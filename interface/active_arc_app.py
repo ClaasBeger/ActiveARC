@@ -443,13 +443,16 @@ def _explore_phase() -> None:
             "Using the table fallback below."
         )
         rc1, rc2 = st.columns(2)
+        # Key the size inputs with the editor nonce: programmatic grid copies bump
+        # the nonce, remounting these widgets so their sticky values cannot revert
+        # the just-copied grid's dimensions on the next rerun.
         with rc1:
             qh = st.number_input(
                 "Query grid height",
                 min_value=1,
                 max_value=32,
                 value=st.session_state.query_h,
-                key="qh_in",
+                key=f"qh_in_{_qnonce}",
             )
         with rc2:
             qw = st.number_input(
@@ -457,7 +460,7 @@ def _explore_phase() -> None:
                 min_value=1,
                 max_value=32,
                 value=st.session_state.query_w,
-                key="qw_in",
+                key=f"qw_in_{_qnonce}",
             )
 
         if qh != st.session_state.query_h or qw != st.session_state.query_w:
