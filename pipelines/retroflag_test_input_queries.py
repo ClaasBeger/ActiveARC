@@ -16,6 +16,51 @@ if str(ROOT_DIR) not in sys.path:
 from framework.grids import Grid, clone_grid, is_equal_grid
 
 
+def audit_duplicate_shown_tests(trial: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return duplicate shown test-input events from a trial transcript."""
+    shown: List[Grid] = []
+    dups: List[Dict[str, Any]] = []
+    for turn in trial.get("transcript") or []:
+        calls = turn.get("tool_calls") or []
+        results = turn.get("tool_results") or []
+        for i, call in enumerate(calls):
+            if call.get("name") != "finish_exploration":
+                continue
+            if i >= len(results):
+                continue
+            res = results[i].get("result") or {}
+            grid = res.get("test_input_grid")
+            if not grid:
+                continue
+            rnd = int(res.get("test_round") or len(shown) + 1)
+            for j, prev in enumerate(shown, start=1):
+                if is_equal_grid(grid, prev):
+                    dups.append(
+                        {
+                            "test_round": rnd,
+                            "duplicate_of_round": j,
+                            "turn": turn.get("turn"),
+                        }
+                    )
+                    break
+            shown.append(clone_grid(grid))
+    return dups
+
+
+def _audit_duplicate_shown_tests(run_dir: Path) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for path in sorted(run_dir.glob("*.json")):
+        if path.name in ("manifest.json", "summary.json"):
+            continue
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if "transcript" not in data:
+            continue
+        dups = audit_duplicate_shown_tests(data)
+        if dups:
+            out.append({"task_id": data.get("task_id", path.stem), "duplicates": dups})
+    return out
+
+
 def _parse_args(raw: str) -> Dict[str, Any]:
     try:
         return json.loads(raw)
@@ -120,6 +165,9 @@ def retroflag_run_dir(run_dir: Path) -> Dict[str, Any]:
     summary["rows"] = rows
     summary["test_input_query_total"] = n_tricks
     summary["n_tasks_with_test_input_query"] = n_tasks_with_trick
+    dup_rows = _audit_duplicate_shown_tests(run_dir)
+    summary["duplicate_shown_test_input_tasks"] = dup_rows
+    summary["n_tasks_with_duplicate_shown_test"] = len(dup_rows)
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     jsonl_path = run_dir / "summary.jsonl"
@@ -131,6 +179,8 @@ def retroflag_run_dir(run_dir: Path) -> Dict[str, Any]:
         "n_tasks": len(rows),
         "test_input_query_total": n_tricks,
         "n_tasks_with_test_input_query": n_tasks_with_trick,
+        "n_tasks_with_duplicate_shown_test": len(dup_rows),
+        "duplicate_shown_test_input_tasks": dup_rows,
     }
 
 

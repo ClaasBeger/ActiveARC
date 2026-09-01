@@ -96,6 +96,8 @@ class ActiveArcTrialSession:
         exclude: List[Grid] = []
         if self.hot_start_pair is not None:
             exclude.append(self.hot_start_pair.input)
+        for _, test_in in self.shown_test_inputs:
+            exclude.append(test_in)
         pair = sample_consistent_dynamic_pair(
             self.task,
             self._verifier_fn(),
@@ -104,7 +106,8 @@ class ActiveArcTrialSession:
         )
         if pair is None:
             raise RuntimeError(
-                f"Could not sample dynamic test pair for {self.task_id!r}; try another seed."
+                f"Could not sample a new dynamic test pair for {self.task_id!r} "
+                f"(distinct from {len(exclude)} prior example(s)); try another seed."
             )
         return pair
 
