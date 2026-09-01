@@ -79,8 +79,26 @@ class SlippagePair:
     n_re_arc_available: int
     n_arc_gen_stable: int
 
-    def to_dict(self) -> dict:
-        return asdict(self)
+    def to_dict(self, *, is_canonical: bool | None = None) -> dict:
+        out = asdict(self)
+        if is_canonical is not None:
+            out["is_canonical"] = is_canonical
+        return out
+
+
+def _canonical_narrow_slot_by_task(pairs: Sequence[SlippagePair]) -> dict[str, VerifierSlot]:
+    """Pick the narrow slot with highest RE-ARC fail rate per task."""
+    by_task: dict[str, list[SlippagePair]] = {}
+    for p in pairs:
+        by_task.setdefault(p.task_id, []).append(p)
+    out: dict[str, VerifierSlot] = {}
+    for tid, task_pairs in by_task.items():
+        best = max(
+            task_pairs,
+            key=lambda p: (p.narrow_fail_rate, p.narrow_fail_count, p.narrow_slot),
+        )
+        out[tid] = best.narrow_slot
+    return out
 
 
 def _score_fail_count(
@@ -268,11 +286,21 @@ def save_slippage_pairs(
     """Write pairs (+ optional metadata) as JSON."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    canonical_by_task = _canonical_narrow_slot_by_task(pairs)
+    payload_meta = dict(meta or {})
+    payload_meta["canonical_narrow_rule"] = (
+        "Per task, the narrow slot with highest narrow_fail_rate on scored RE-ARC "
+        "samples; ties break on narrow_fail_count then narrow_slot."
+    )
+    payload_meta["canonical_narrow_by_task"] = canonical_by_task
     payload = {
-        "meta": meta or {},
+        "meta": payload_meta,
         "n_pairs": len(pairs),
         "n_tasks": len({p.task_id for p in pairs}),
-        "pairs": [p.to_dict() for p in pairs],
+        "pairs": [
+            p.to_dict(is_canonical=(p.narrow_slot == canonical_by_task[p.task_id]))
+            for p in pairs
+        ],
     }
     out_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     return out_path

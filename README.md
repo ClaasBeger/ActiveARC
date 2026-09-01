@@ -161,7 +161,9 @@ python -m pipelines.find_slippage_pairs \
     --max-re-arc-dynamic-pairs 50
 ```
 
-Results land in `experiments/slippage/slippage_pairs.json`.
+Results land in `experiments/slippage/slippage_pairs.json`. Each row includes
+``is_canonical`` (the narrow slot worst on RE-ARC for that task; see
+``meta.canonical_narrow_by_task``).
 
 ## P-ARC dataset
 
