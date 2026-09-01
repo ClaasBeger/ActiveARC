@@ -14,7 +14,7 @@ from framework.prompting.active_arc_tools import (
     build_task_user_message,
     chat_tools_for_phase,
     execute_tool_call,
-    test_phase_tool_required_message,
+    plain_text_protocol_reminder,
 )
 
 # Backward-compatible re-exports
@@ -101,8 +101,8 @@ def run_openai_agent_loop(
         messages.append(assistant_msg)
 
         if not msg.tool_calls:
-            if session.phase == "test":
-                reminder = test_phase_tool_required_message(assistant_text=msg.content)
+            reminder = plain_text_protocol_reminder(session, assistant_text=msg.content)
+            if reminder is not None:
                 transcript[-1]["tool_results"].append(
                     {
                         "name": "_protocol_reminder",

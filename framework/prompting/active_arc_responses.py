@@ -16,8 +16,8 @@ from framework.prompting.active_arc_tools import (
     DEFAULT_OPENAI_MODEL,
     build_initial_responses_input,
     execute_tool_call,
+    plain_text_protocol_reminder,
     responses_tools_for_phase,
-    test_phase_tool_required_message,
 )
 from framework.prompting.response_logging import summarize_response, usage_totals
 
@@ -139,8 +139,8 @@ def run_active_arc_responses_loop(
 
         if not function_calls:
             assistant_text = _assistant_text(response)
-            if session.phase == "test":
-                reminder = test_phase_tool_required_message(assistant_text=assistant_text)
+            reminder = plain_text_protocol_reminder(session, assistant_text=assistant_text)
+            if reminder is not None:
                 transcript[-1]["tool_results"].append(
                     {
                         "name": "_protocol_reminder",

@@ -181,15 +181,74 @@ def build_task_user_message(session: ActiveArcTrialSession) -> str:
     )
 
 
-def test_phase_tool_required_message(*, assistant_text: Optional[str] = None) -> str:
-    """User-turn reminder when the model replies in plain text during testing."""
+def looks_like_raw_grid(text: Optional[str]) -> bool:
+    """True when plain text looks like a pasted grid row or matrix (e.g. [], [0,1], [[0,1],...])."""
+    if not text:
+        return False
+    s = text.strip()
+    if not s.startswith("["):
+        return False
+    try:
+        parsed = json.loads(s)
+    except json.JSONDecodeError:
+        if s.startswith("[[") and "," in s:
+            return True
+        if "," in s:
+            return any(ch.isdigit() for ch in s)
+        return False
+    if not isinstance(parsed, list):
+        return False
+    if not parsed:
+        return True
+    if all(isinstance(cell, int) for cell in parsed):
+        return True
+    if all(isinstance(row, list) for row in parsed):
+        return True
+    return False
+
+
+def explore_phase_grid_dump_message(*, assistant_text: Optional[str] = None) -> str:
+    """User-turn reminder when the model pastes a grid in plain text during exploration."""
     preview = ""
     if assistant_text and assistant_text.strip():
-        preview = (
-            f"\n\nYour message ({assistant_text.strip()!r}) was not accepted as a final answer."
-        )
+        trimmed = assistant_text.strip()
+        if len(trimmed) > 80:
+            trimmed = trimmed[:77] + "..."
+        preview = f"\n\nYour message ({trimmed!r}) was not accepted as a tool call."
     return (
-        "Testing stage: answers must be submitted via a tool call, not plain text."
+        "Exploration stage: do not paste grids as plain text."
+        f"{preview}\n\n"
+        "Use submit_query with a JSON object "
+        '{"grid": [[...], ...]} to query the environment, or call finish_exploration '
+        "when you are ready for the held-out test input."
+    )
+
+
+def plain_text_protocol_reminder(
+    session: ActiveArcTrialSession,
+    *,
+    assistant_text: Optional[str] = None,
+) -> Optional[str]:
+    """Reminder when the model pastes a grid as plain text; surrenders return None."""
+    if not looks_like_raw_grid(assistant_text):
+        return None
+    if session.phase == "test":
+        return test_phase_tool_required_message(assistant_text=assistant_text)
+    if session.phase == "explore":
+        return explore_phase_grid_dump_message(assistant_text=assistant_text)
+    return None
+
+
+def test_phase_tool_required_message(*, assistant_text: Optional[str] = None) -> str:
+    """User-turn reminder when the model pastes a grid in plain text during testing."""
+    preview = ""
+    if assistant_text and assistant_text.strip():
+        trimmed = assistant_text.strip()
+        if len(trimmed) > 80:
+            trimmed = trimmed[:77] + "..."
+        preview = f"\n\nYour message ({trimmed!r}) was not accepted as a final answer."
+    return (
+        "Testing stage: do not paste grids as plain text."
         f"{preview}\n\n"
         "Call submit_final_answer with a JSON object "
         '{"grid": [[...], ...]} — a rectangular matrix the same shape as '
