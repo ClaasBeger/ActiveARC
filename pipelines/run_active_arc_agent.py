@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Run an OpenAI tool-calling agent on one ActiveARC trial (same rules as the Streamlit UI).
 
-Requires ``OPENAI_API_KEY``. Set ``OPENAI_MODEL`` to your chat model (e.g. ``gpt-4o`` or newer).
+Requires ``OPENAI_API_KEY``. Default backend is the Responses API with ``gpt-5.6-luna``.
 
 Example::
 
     python -m pipelines.run_active_arc_agent --task-id 8eb1be9a --seed 42
+
+    # Legacy Chat Completions backend:
+    python -m pipelines.run_active_arc_agent --backend chat --model gpt-4o
 
 """
 
@@ -21,7 +24,10 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from framework.active_arc.headless_trial import create_trial_session
+from framework.active_arc.trial_record import build_trial_record
 from framework.prompting.active_arc_openai import run_openai_agent_loop
+from framework.prompting.active_arc_responses import run_active_arc_responses_loop
+from framework.prompting.active_arc_tools import DEFAULT_OPENAI_MODEL
 
 
 def _parse_args() -> argparse.Namespace:
@@ -45,16 +51,34 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--seed", type=int, default=0)
     p.add_argument(
+        "--backend",
+        choices=["responses", "chat"],
+        default="responses",
+        help="OpenAI API backend (default: responses — recommended for multi-turn tool loops).",
+    )
+    p.add_argument(
         "--model",
         type=str,
         default=None,
-        help="OpenAI model name (default: env OPENAI_MODEL or gpt-4o).",
+        help=f"OpenAI model name (default: env OPENAI_MODEL or {DEFAULT_OPENAI_MODEL}).",
     )
     p.add_argument("--max-turns", type=int, default=64)
-    p.add_argument("--temperature", type=float, default=0.2)
-    p.add_argument("--hot-start", action="store_true")
+    p.add_argument("--temperature", type=float, default=0.2, help="Chat backend only.")
+    p.add_argument(
+        "--reasoning-effort",
+        type=str,
+        default="low",
+        help="Responses backend only: none|low|medium|high (default: low). Pass 'none' to omit.",
+    )
+    p.add_argument("--hot-start", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--noisy-science", action="store_true")
-    p.add_argument("--re-trials", action="store_true")
+    p.add_argument("--re-trials", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument(
+        "--fixed-test",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Keep one test sample for the whole trial (default: resample on each finish_exploration).",
+    )
     p.add_argument("--noise-probability", type=float, default=0.12)
     p.add_argument(
         "--dump-transcript",
@@ -77,21 +101,32 @@ def main() -> None:
         dataset=args.dataset,
         sample_family=args.sample_family,
         persist_sampled_family=args.persist_sampled_family,
+        fixed_test=args.fixed_test,
     )
-    result = run_openai_agent_loop(
+    reasoning_effort = None if args.reasoning_effort.lower() == "none" else args.reasoning_effort
+    if args.backend == "responses":
+        result = run_active_arc_responses_loop(
+            session,
+            model=args.model,
+            max_turns=args.max_turns,
+            reasoning_effort=reasoning_effort,
+        )
+    else:
+        result = run_openai_agent_loop(
+            session,
+            model=args.model,
+            max_turns=args.max_turns,
+            temperature=args.temperature,
+        )
+    out = build_trial_record(
         session,
-        model=args.model,
-        max_turns=args.max_turns,
-        temperature=args.temperature,
+        result,
+        dataset=args.dataset,
+        hot_start=args.hot_start,
+        noisy_science=args.noisy_science,
+        re_trials=args.re_trials,
+        fixed_test=args.fixed_test,
     )
-    out = {
-        "task_id": session.task_id,
-        "seed": session.seed,
-        "final": result.get("final"),
-        "query_count": session.query_count,
-        "phase": session.phase,
-        "transcript": result.get("transcript"),
-    }
     text = json.dumps(out, indent=2)
     print(text)
     if args.dump_transcript:

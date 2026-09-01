@@ -98,20 +98,49 @@ def pick_random_eligible_task_id(rng: random.Random) -> Tuple[str, ArcTask]:
     )
 
 
+def _generate_dynamic_pairs(
+    task: ArcTask,
+    num_examples: int,
+    rng: random.Random,
+) -> List[GridPair]:
+    gen = task.arc_gen_generator
+    if gen is None:
+        raise ValueError("Task has no dynamic generator")
+    try:
+        return gen(num_examples, rng)
+    except TypeError:
+        return gen(num_examples)
+
+
 def sample_consistent_dynamic_pair(
     task: ArcTask,
     verifier: Verifier,
     rng: random.Random,
     *,
+    exclude_inputs: Optional[List] = None,
     max_tries: int = 48,
 ) -> Optional[GridPair]:
-    """Sample one ARC-GEN dynamic pair where *verifier* matches the labeled output."""
+    """Sample one dynamic generator pair consistent with the trial *verifier*.
+
+    ARC-GEN (and similar) generators attach a labeled output to each input. In the
+    common case that label matches every validated verifier, the first draw would
+    suffice. We still re-roll because:
+
+    - the trial uses one chosen verifier slot, which can disagree with the label on
+      rare or ambiguous generator samples;
+    - generator or verifier calls can throw on malformed edge cases.
+
+    This is a safety filter, not because labels are usually wrong.
+    """
     if task.arc_gen_generator is None:
         return None
+    excluded = exclude_inputs or []
     for _ in range(max_tries):
         try:
-            pair = copy.deepcopy(task.arc_gen_generator(1)[0])
+            pair = copy.deepcopy(_generate_dynamic_pairs(task, 1, rng)[0])
         except Exception:
+            continue
+        if any(is_equal_grid(pair.input, ex) for ex in excluded):
             continue
         try:
             out = verifier(copy.deepcopy(pair.input))

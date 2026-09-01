@@ -12,15 +12,15 @@ streamlit run interface/active_arc_app.py
 Pass app flags after `--` (Streamlit does not recognize them otherwise). Flags are combinable:
 
 ```bash
-# One free training pair is shown at start by default (no query cost); disable with:
+# One generator example pair is shown at start by default (no query cost); disable with:
 streamlit run interface/active_arc_app.py -- --no-hot-start
 
 # Randomly corrupt query outputs (default p=0.12; clamped to 0.05–0.20)
 streamlit run interface/active_arc_app.py -- --noisy-science
 streamlit run interface/active_arc_app.py -- --noisy-science --noise-probability 0.15
 
-# Wrong test answer sends you back to exploration (+10 query count)
-streamlit run interface/active_arc_app.py -- --re-trials
+# Wrong test answer sends you back to exploration (+10 query count); on by default:
+streamlit run interface/active_arc_app.py -- --no-re-trials
 
 # Fixed RNG for task/verifier selection
 streamlit run interface/active_arc_app.py -- --seed 42
@@ -164,6 +164,40 @@ python -m pipelines.find_slippage_pairs \
 Results land in `experiments/slippage/slippage_pairs.json`. Each row includes
 ``is_canonical`` (the narrow slot worst on RE-ARC for that task; see
 ``meta.canonical_narrow_by_task``).
+
+## OpenAI agent experiments (multi-turn)
+
+Headless trials use the same explore → test flow as the Streamlit UI. The
+recommended backend is the **Responses API** with custom function tools
+(``submit_query``, ``finish_exploration``, ``submit_final_answer``). Each model
+turn may call tools; tool outputs are fed back via ``previous_response_id`` so
+reasoning context stays server-side. Stable rules are sent once in a turn-1
+``developer`` input message (persisted in the chain); later turns only append
+``function_call_output`` items.
+
+Default model: **``gpt-5.6-luna``** (cost-efficient for high-volume agent loops).
+Use ``--backend chat`` for legacy Chat Completions.
+
+```bash
+export OPENAI_API_KEY=...
+
+# Proof-of-concept on one ARC task (Responses API + Luna)
+python -m pipelines.run_active_arc_agent \
+    --task-id 8eb1be9a \
+    --seed 42 \
+    --dump-transcript experiments/runs/poc_luna.json
+
+# Slippage task from the canonical 249 (narrow = worst on RE-ARC)
+python -m pipelines.run_active_arc_agent \
+    --task-id 017c7c7b \
+    --seed 0 \
+    --backend responses \
+    --model gpt-5.6-luna
+```
+
+Implementation: ``framework/prompting/active_arc_responses.py`` (Responses),
+``framework/prompting/active_arc_openai.py`` (Chat Completions fallback),
+``framework/prompting/active_arc_tools.py`` (shared tool schemas + environment).
 
 ## P-ARC dataset
 

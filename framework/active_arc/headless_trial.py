@@ -65,7 +65,7 @@ class ActiveArcTrialSession:
     verifier_slot: VerifierSlot
     valid_verifiers: List[Tuple[VerifierSlot, Verifier]]
     hot_start_pair: Optional[GridPair]
-    test_pair: GridPair
+    test_pair: Optional[GridPair]
     dataset: str = "arc"
     phase: Phase = "explore"
     query_count: int = 0
@@ -74,7 +74,39 @@ class ActiveArcTrialSession:
     noisy_science: bool = False
     re_trials: bool = False
     hot_start: bool = False
+    fixed_test: bool = False
+    test_round: int = 0
     test_correct: Optional[bool] = None
+    shown_test_inputs: List[Tuple[int, Grid]] = field(default_factory=list)
+    test_input_query_count: int = 0
+
+    def _matching_shown_test_round(self, grid: Grid) -> Optional[int]:
+        for rnd, test_in in self.shown_test_inputs:
+            if is_equal_grid(grid, test_in):
+                return rnd
+        return None
+
+    def _verifier_fn(self) -> Verifier:
+        for slot, fn in self.valid_verifiers:
+            if slot == self.verifier_slot:
+                return fn
+        raise RuntimeError(f"No verifier callable for slot {self.verifier_slot!r}")
+
+    def _sample_test_pair(self) -> GridPair:
+        exclude: List[Grid] = []
+        if self.hot_start_pair is not None:
+            exclude.append(self.hot_start_pair.input)
+        pair = sample_consistent_dynamic_pair(
+            self.task,
+            self._verifier_fn(),
+            self.rng,
+            exclude_inputs=exclude or None,
+        )
+        if pair is None:
+            raise RuntimeError(
+                f"Could not sample dynamic test pair for {self.task_id!r}; try another seed."
+            )
+        return pair
 
     def train_pairs_json(self) -> List[Dict[str, List[List[int]]]]:
         """Canonical ARC training pairs (for prompts)."""
@@ -138,19 +170,28 @@ class ActiveArcTrialSession:
                 }
 
         self.query_count += 1
+        matched_test_round = self._matching_shown_test_round(inp)
+        if matched_test_round is not None:
+            self.test_input_query_count += 1
         self.history.append(
             {
                 "input": clone_grid(inp),
                 "output": clone_grid(shown),
                 "note": note,
+                "queried_shown_test_input": matched_test_round is not None,
+                "matched_test_round": matched_test_round,
             }
         )
-        return {
+        out: Dict[str, Any] = {
             "ok": True,
             "output_grid": clone_grid(shown),
             "note": note,
             "query_count": self.query_count,
         }
+        if matched_test_round is not None:
+            out["queried_shown_test_input"] = True
+            out["matched_test_round"] = matched_test_round
+        return out
 
     def finish_exploration(self) -> Dict[str, Any]:
         """Switch to test phase; return the test input grid."""
@@ -159,13 +200,23 @@ class ActiveArcTrialSession:
                 "ok": False,
                 "error": f"finish_exploration only from explore (now: {self.phase}).",
             }
+        if not self.fixed_test or self.test_pair is None:
+            self.test_pair = self._sample_test_pair()
+            self.test_round += 1
         self.phase = "test"
+        assert self.test_pair is not None
         ti = clone_grid(self.test_pair.input)
+        self.shown_test_inputs.append((self.test_round, clone_grid(ti)))
         return {
             "ok": True,
             "test_input_grid": ti,
             "phase": self.phase,
-            "message": "Predict the output for test_input_grid using the same rule as in training.",
+            "test_round": self.test_round,
+            "message": (
+                "Testing stage. Apply the same transformation rule to test_input_grid and "
+                "submit your predicted output grid with submit_final_answer "
+                "(JSON array of rows; each cell an integer 0–9)."
+            ),
         }
 
     def submit_final_answer(self, grid: Grid) -> Dict[str, Any]:
@@ -175,6 +226,8 @@ class ActiveArcTrialSession:
                 "ok": False,
                 "error": f"submit_final_answer only in test phase (now: {self.phase}).",
             }
+        if self.test_pair is None:
+            return {"ok": False, "error": "No test sample; call finish_exploration first."}
         ti = clone_grid(self.test_pair.input)
         try:
             pred = normalize_query_grid(clone_grid(grid))
@@ -194,13 +247,20 @@ class ActiveArcTrialSession:
             self.query_count += 10
             self.phase = "explore"
             self.test_correct = None
+            retry_msg = (
+                "Wrong answer: +10 query penalty. You are back in explore; query again, "
+                "then finish_exploration to retry the same test."
+                if self.fixed_test
+                else "Wrong answer: +10 query penalty. You are back in explore; query again, "
+                "then finish_exploration for a new test sample."
+            )
             return {
                 "ok": True,
                 "correct": False,
                 "query_count": self.query_count,
                 "phase": self.phase,
                 "penalty_applied": True,
-                "message": "Wrong answer: +10 query penalty. You are back in explore; query again, then finish_exploration to retry the same test.",
+                "message": retry_msg,
             }
 
         self.test_correct = ok
@@ -398,13 +458,96 @@ def _create_conceptarc_trial_inputs(
     raise RuntimeError("Could not build a ConceptARC trial from any exported program.")
 
 
+def _sample_hot_start_pair(
+    task: ArcTask,
+    verifier: Verifier,
+    rng: random.Random,
+    *,
+    hot_start: bool,
+) -> Optional[GridPair]:
+    if not hot_start:
+        return None
+    if task.arc_gen_generator is not None:
+        hot = sample_consistent_dynamic_pair(task, verifier, rng)
+        if hot is None:
+            raise ValueError(
+                f"Could not sample dynamic hot-start pair for {task.task_id!r}; try another seed."
+            )
+        return hot
+    if task.train_pairs:
+        return copy.deepcopy(rng.choice(task.train_pairs))
+    return None
+
+
+def _sample_hot_and_test_pairs(
+    task: ArcTask,
+    verifier: Verifier,
+    rng: random.Random,
+    *,
+    hot_start: bool,
+) -> Tuple[Optional[GridPair], GridPair]:
+    """Sample dynamic hot-start (optional) and a fixed test pair from the generator."""
+    if task.arc_gen_generator is None:
+        raise ValueError(f"Task {task.task_id!r} has no dynamic generator")
+
+    hot = _sample_hot_start_pair(task, verifier, rng, hot_start=hot_start)
+    exclude: List[Grid] = [hot.input] if hot is not None else []
+
+    test = sample_consistent_dynamic_pair(
+        task, verifier, rng, exclude_inputs=exclude or None
+    )
+    if test is None:
+        detail = " (distinct from hot-start)" if hot is not None else ""
+        raise ValueError(
+            f"Could not sample dynamic test pair for {task.task_id!r}{detail}; try another seed."
+        )
+    return hot, test
+
+
+def _resolve_hot_start_pair(
+    task: ArcTask,
+    verifier: Verifier,
+    rng: random.Random,
+    test_pair: GridPair,
+    *,
+    hot_start: bool,
+) -> Tuple[Optional[GridPair], GridPair]:
+    """Attach a hot-start pair; resample test if it collides with hot-start."""
+    if not hot_start:
+        return None, test_pair
+
+    if task.arc_gen_generator is not None:
+        hot = sample_consistent_dynamic_pair(task, verifier, rng)
+        if hot is None:
+            raise ValueError(
+                f"Could not sample dynamic hot-start pair for {task.task_id!r}; try another seed."
+            )
+        if is_equal_grid(test_pair.input, hot.input):
+            replacement = sample_consistent_dynamic_pair(
+                task, verifier, rng, exclude_inputs=[hot.input]
+            )
+            if replacement is None:
+                raise ValueError(
+                    f"Could not sample test pair distinct from hot-start for {task.task_id!r}; "
+                    "try another seed."
+                )
+            test_pair = replacement
+        return hot, test_pair
+
+    if task.train_pairs:
+        return copy.deepcopy(rng.choice(task.train_pairs)), test_pair
+
+    return None, test_pair
+
+
 def create_trial_session(
     *,
     seed: int,
     task_id: Optional[str] = None,
-    hot_start: bool = False,
+    hot_start: bool = True,
     noisy_science: bool = False,
-    re_trials: bool = False,
+    re_trials: bool = True,
+    fixed_test: bool = False,
     noise_probability: float = 0.12,
     dataset: str = "arc",
     sample_family: bool = False,
@@ -434,6 +577,7 @@ def create_trial_session(
     test_pair: Optional[GridPair] = None
 
     valid_list: Optional[List[Tuple[VerifierSlot, Verifier]]] = None
+    hot: Optional[GridPair] = None
 
     if dataset == "conceptarc":
         tid, task, slot, verifier, test_pair, valid_list = _create_conceptarc_trial_inputs(
@@ -452,13 +596,19 @@ def create_trial_session(
         if not valid:
             raise ValueError(f"No valid verifier for task {task_id!r}")
         slot, verifier = rng.choice(valid)
-        tp = sample_consistent_dynamic_pair(task, verifier, rng)
-        if tp is None:
-            raise ValueError(
-                f"Could not sample ARC-GEN dynamic test pair for {task_id!r}; try another seed."
+        hot = _sample_hot_start_pair(task, verifier, rng, hot_start=hot_start)
+        if fixed_test:
+            exclude = [hot.input] if hot is not None else []
+            test_pair = sample_consistent_dynamic_pair(
+                task, verifier, rng, exclude_inputs=exclude or None
             )
+            if test_pair is None:
+                raise ValueError(
+                    f"Could not sample dynamic test pair for {task_id!r}; try another seed."
+                )
+        else:
+            test_pair = None
         tid = task_id
-        test_pair = tp
         valid_list = valid
     else:
         for t_id, t in iter_eligible_tasks(rng):
@@ -466,8 +616,18 @@ def create_trial_session(
             if not valid:
                 continue
             sl, ver = rng.choice(valid)
-            tp = sample_consistent_dynamic_pair(t, ver, rng)
-            if tp is None:
+            try:
+                hot = _sample_hot_start_pair(t, ver, rng, hot_start=hot_start)
+                if fixed_test:
+                    exclude = [hot.input] if hot is not None else []
+                    tp = sample_consistent_dynamic_pair(
+                        t, ver, rng, exclude_inputs=exclude or None
+                    )
+                    if tp is None:
+                        continue
+                else:
+                    tp = None
+            except ValueError:
                 continue
             tid, task, slot, verifier, test_pair = t_id, t, sl, ver, tp
             valid_list = valid
@@ -478,17 +638,20 @@ def create_trial_session(
         or task is None
         or slot is None
         or verifier is None
-        or test_pair is None
         or valid_list is None
+        or (fixed_test and test_pair is None)
     ):
         raise RuntimeError(
             "Could not build trial (need eligible task + dynamic pair). "
             "Try --task-id or check external data."
         )
 
-    hot: Optional[GridPair] = None
-    if hot_start and task.train_pairs:
-        hot = copy.deepcopy(rng.choice(task.train_pairs))
+    if dataset in ("conceptarc", "parc"):
+        assert test_pair is not None
+        hot, resolved_test = _resolve_hot_start_pair(
+            task, verifier, rng, test_pair, hot_start=hot_start
+        )
+        test_pair = resolved_test if fixed_test else None
 
     return ActiveArcTrialSession(
         task_id=tid,
@@ -507,5 +670,6 @@ def create_trial_session(
         noisy_science=noisy_science,
         re_trials=re_trials,
         hot_start=hot_start,
+        fixed_test=fixed_test,
         test_correct=None,
     )

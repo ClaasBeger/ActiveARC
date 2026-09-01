@@ -35,7 +35,7 @@ def _parse_cli() -> argparse.Namespace:
         "--hot-start",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Show one random training pair for free (no query cost). On by default; use --no-hot-start to disable.",
+        help="Show one random generator example pair for free (no query cost). On by default; use --no-hot-start to disable.",
     )
     p.add_argument(
         "--noisy-science",
@@ -44,14 +44,21 @@ def _parse_cli() -> argparse.Namespace:
     )
     p.add_argument(
         "--re-trials",
-        action="store_true",
-        help="Wrong final test answer returns to exploration and adds +10 to query count. Combinable.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Wrong final test answer returns to exploration and adds +10 to query count. On by default; use --no-re-trials to disable.",
     )
     p.add_argument(
         "--mode",
         choices=["standard", "hot_start", "noisy_science", "re_trials"],
         default=None,
         help="Legacy alias for a single feature (OR-combined with --hot-start / --noisy-science / --re-trials).",
+    )
+    p.add_argument(
+        "--fixed-test",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Keep one test sample for the whole trial (default: resample on each finish_exploration).",
     )
     p.add_argument(
         "--noise-probability",
@@ -251,6 +258,7 @@ def _init_trial(
             hot_start=hot_start,
             noisy_science=noisy_science,
             re_trials=re_trials,
+            fixed_test=bool(getattr(args, "fixed_test", False)),
             noise_probability=noise_p,
             dataset=dataset,
             sample_family=bool(getattr(args, "sample_family", False)),
@@ -325,7 +333,7 @@ def _render_history_section(*, title: str) -> None:
 
 
 def _render_hot_start_reference(*, max_px: int = 18) -> None:
-    """Show the free training pair when hot_start is on (exploration and test)."""
+    """Show the free hot-start example pair when hot_start is on (exploration and test)."""
     if not st.session_state.get("hot_start") or st.session_state.hot_start_pair is None:
         return
     st.info(
@@ -360,7 +368,7 @@ def _explore_phase() -> None:
     st.caption(
         "Edit the input grid, then submit a query. Each successful query increases your query count. "
         "If the verifier errors on your input, the error is shown and that submission is not counted. "
-        "The hidden reference program is not revealed."
+        "The transformation rule is not given in text; infer it from training examples and query outputs."
     )
 
     if hot_start:
