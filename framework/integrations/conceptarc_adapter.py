@@ -193,6 +193,16 @@ def _load_gen_api() -> Optional["_ConceptArcGenApi"]:
             )
             _GEN_API = None
         finally:
+            # Drop the ConceptARC-GEN paths again: every module we need is already
+            # bound in sys.modules (all ``import common`` in ConceptARC-GEN happen at
+            # module level, during the imports above). Leaving them on sys.path would
+            # let ConceptARC-GEN's vendored ARC-GEN (``common``, ``tasks``) shadow
+            # ActiveARC's own ARC-GEN checkout for the rest of the process.
+            for p in added_paths:
+                try:
+                    sys.path.remove(p)
+                except ValueError:
+                    pass
             # Restore ActiveARC's own ``common`` (used by the ARC-AGI ARC-GEN path);
             # the ConceptARC modules already captured their own reference.
             if saved_common is not None:
@@ -311,21 +321,28 @@ def _generate_examples(
     required: bool,
 ) -> List[dict]:
     """Generate up to ``count`` distinct examples from a DSL program."""
-    random.seed(seed)
     out: List[dict] = []
     seen: set[tuple[Any, Any]] = set()
     attempts = 0
-    while len(out) < count and attempts < _SAMPLE_ATTEMPTS:
-        attempts += 1
-        try:
-            ex = module.generate_program_example(program)
-        except Exception:
-            continue
-        key = (_grid_key(ex["input"]), _grid_key(ex["output"]))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append({"input": ex["input"], "output": ex["output"]})
+    # The DSL draws from the global ``random`` module, so seeding is needed for
+    # reproducible exports — but save/restore the caller's RNG state so loading a
+    # ConceptARC task does not clobber randomness for the rest of the process.
+    state = random.getstate()
+    random.seed(seed)
+    try:
+        while len(out) < count and attempts < _SAMPLE_ATTEMPTS:
+            attempts += 1
+            try:
+                ex = module.generate_program_example(program)
+            except Exception:
+                continue
+            key = (_grid_key(ex["input"]), _grid_key(ex["output"]))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"input": ex["input"], "output": ex["output"]})
+    finally:
+        random.setstate(state)
     if required and len(out) < count:
         raise RuntimeError(
             f"Could only generate {len(out)}/{count} distinct ConceptARC examples."
