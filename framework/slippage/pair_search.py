@@ -69,6 +69,8 @@ class SlippagePair:
     broad_slot: VerifierSlot
     narrow_slot: VerifierSlot
     n_re_arc_scored: int
+    n_re_arc_stable_scored: int
+    n_re_arc_dynamic_scored: int
     broad_fail_count: int
     narrow_fail_count: int
     broad_fail_rate: float
@@ -99,19 +101,25 @@ def _score_fail_count(
     return fails
 
 
-def _select_re_arc_pairs(task: ArcTask, max_pairs: int) -> List[GridPair]:
-    """Prefer committed RE-ARC stable pairs; fall back to dynamic generation."""
-    pairs: List[GridPair] = []
-    if task.re_arc_synthetic_pairs:
-        pairs = list(task.re_arc_synthetic_pairs)
-    elif task.re_arc_generator is not None:
+def _select_re_arc_pairs(
+    task: ArcTask,
+    *,
+    max_stable_pairs: int,
+    max_dynamic_pairs: int,
+) -> tuple[List[GridPair], int, int]:
+    """Stable RE-ARC zip pairs plus optional freshly generated dynamic pairs."""
+    stable: List[GridPair] = list(task.re_arc_synthetic_pairs or [])
+    if max_stable_pairs > 0 and len(stable) > max_stable_pairs:
+        stable = stable[:max_stable_pairs]
+
+    dynamic: List[GridPair] = []
+    if max_dynamic_pairs > 0 and task.re_arc_generator is not None:
         try:
-            pairs = list(task.re_arc_generator(max(max_pairs, 1)))
+            dynamic = list(task.re_arc_generator(max_dynamic_pairs))
         except Exception:
-            pairs = []
-    if max_pairs > 0 and len(pairs) > max_pairs:
-        pairs = pairs[:max_pairs]
-    return pairs
+            dynamic = []
+
+    return stable + dynamic, len(stable), len(dynamic)
 
 
 def candidate_task_ids(*, csv_path: Path | None = None) -> List[str]:
@@ -133,6 +141,7 @@ def find_slippage_pairs_for_task(
     task_id: str,
     *,
     max_re_arc_pairs: int = 200,
+    max_re_arc_dynamic_pairs: int = 0,
     majority_threshold: float = 0.5,
     pair_timeout_s: float = 0.5,
     csv_path: Path | None = None,
@@ -141,7 +150,8 @@ def find_slippage_pairs_for_task(
 
     Args:
       task_id: ARC-AGI-1 training task id.
-      max_re_arc_pairs: Cap on RE-ARC pairs used for fail-rate scoring.
+      max_re_arc_pairs: Cap on RE-ARC stable pairs used for fail-rate scoring.
+      max_re_arc_dynamic_pairs: Fresh RE-ARC generator pairs to append (0 = none).
       majority_threshold: Narrow must fail at least this fraction of RE-ARC
           pairs (default ``>= 0.5``).
       pair_timeout_s: Per-example verifier wall-clock timeout (counts as fail).
@@ -163,7 +173,11 @@ def find_slippage_pairs_for_task(
     if broad_fn is None:
         return []
 
-    re_pairs = _select_re_arc_pairs(task, max_re_arc_pairs)
+    re_pairs, n_stable_scored, n_dynamic_scored = _select_re_arc_pairs(
+        task,
+        max_stable_pairs=max_re_arc_pairs,
+        max_dynamic_pairs=max_re_arc_dynamic_pairs,
+    )
     if not re_pairs:
         return []
 
@@ -195,6 +209,8 @@ def find_slippage_pairs_for_task(
                 broad_slot=BROAD_SLOT,
                 narrow_slot=narrow_slot,
                 n_re_arc_scored=len(re_pairs),
+                n_re_arc_stable_scored=n_stable_scored,
+                n_re_arc_dynamic_scored=n_dynamic_scored,
                 broad_fail_count=broad_fails,
                 narrow_fail_count=narrow_fails,
                 broad_fail_rate=round(broad_rate, 6),
@@ -211,6 +227,7 @@ def find_slippage_pairs(
     task_ids: Optional[Iterable[str]] = None,
     *,
     max_re_arc_pairs: int = 200,
+    max_re_arc_dynamic_pairs: int = 0,
     majority_threshold: float = 0.5,
     pair_timeout_s: float = 0.5,
     csv_path: Path | None = None,
@@ -229,6 +246,7 @@ def find_slippage_pairs(
             found = find_slippage_pairs_for_task(
                 tid,
                 max_re_arc_pairs=max_re_arc_pairs,
+                max_re_arc_dynamic_pairs=max_re_arc_dynamic_pairs,
                 majority_threshold=majority_threshold,
                 pair_timeout_s=pair_timeout_s,
                 csv_path=csv_path,

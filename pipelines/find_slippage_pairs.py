@@ -50,7 +50,13 @@ def _parse_args() -> argparse.Namespace:
         "--max-re-arc-pairs",
         type=int,
         default=200,
-        help="Max RE-ARC pairs to score per task (stable pool is truncated).",
+        help="Max RE-ARC stable pairs to score per task (from re_arc.zip).",
+    )
+    p.add_argument(
+        "--max-re-arc-dynamic-pairs",
+        type=int,
+        default=0,
+        help="Fresh RE-ARC generator pairs to append per task (0 = stable only).",
     )
     p.add_argument(
         "--majority-threshold",
@@ -99,7 +105,8 @@ def main() -> None:
 
     print(
         f"Scanning {len(ids)} candidate tasks "
-        f"(max_re_arc_pairs={args.max_re_arc_pairs}, "
+        f"(max_re_arc_stable={args.max_re_arc_pairs}, "
+        f"max_re_arc_dynamic={args.max_re_arc_dynamic_pairs}, "
         f"narrow_fail≥{args.majority_threshold}, "
         f"pair_timeout={args.pair_timeout}s)",
         flush=True,
@@ -108,6 +115,7 @@ def main() -> None:
     pairs = find_slippage_pairs(
         ids,
         max_re_arc_pairs=args.max_re_arc_pairs,
+        max_re_arc_dynamic_pairs=args.max_re_arc_dynamic_pairs,
         majority_threshold=args.majority_threshold,
         pair_timeout_s=args.pair_timeout,
         csv_path=csv_path,
@@ -119,6 +127,7 @@ def main() -> None:
         "csv": str(csv_path),
         "n_candidates_scanned": len(ids),
         "max_re_arc_pairs": args.max_re_arc_pairs,
+        "max_re_arc_dynamic_pairs": args.max_re_arc_dynamic_pairs,
         "majority_threshold": args.majority_threshold,
         "pair_timeout_s": args.pair_timeout,
         "broad_slot": "re_arc",
@@ -126,7 +135,7 @@ def main() -> None:
         "criterion": (
             "Broad (re_arc) and narrow slots are both CSV-valid on the narrow "
             "distribution (train + test + ARC-GEN stable + ARC-GEN dynamic50). "
-            "Broad must pass 100% of scored RE-ARC stable samples. "
+            "Broad must pass 100% of scored RE-ARC stable + dynamic samples. "
             "Narrow fail_rate on those samples >= majority_threshold."
         ),
     }

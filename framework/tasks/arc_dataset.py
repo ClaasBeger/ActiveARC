@@ -130,7 +130,9 @@ def _make_re_arc_generator(task_id: str) -> Optional[Callable[[int], List[GridPa
         pairs: List[GridPair] = []
         for _ in range(num_examples):
             example = gen_fn(diff_lb, diff_ub)  # type: ignore[misc]
-            pairs.append(GridPair(example["input"], example["output"]))
+            inp = [list(row) for row in example["input"]]
+            out = [list(row) for row in example["output"]]
+            pairs.append(GridPair(inp, out))
         return pairs
 
     # Expose as a simple Callable[[int], List[GridPair]] by fixing difficulty.
