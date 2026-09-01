@@ -181,6 +181,22 @@ def build_task_user_message(session: ActiveArcTrialSession) -> str:
     )
 
 
+def test_phase_tool_required_message(*, assistant_text: Optional[str] = None) -> str:
+    """User-turn reminder when the model replies in plain text during testing."""
+    preview = ""
+    if assistant_text and assistant_text.strip():
+        preview = (
+            f"\n\nYour message ({assistant_text.strip()!r}) was not accepted as a final answer."
+        )
+    return (
+        "Testing stage: answers must be submitted via a tool call, not plain text."
+        f"{preview}\n\n"
+        "Call submit_final_answer with a JSON object "
+        '{"grid": [[...], ...]} — a rectangular matrix the same shape as '
+        "test_input_grid, each cell an integer 0–9."
+    )
+
+
 def execute_tool_call(
     session: ActiveArcTrialSession,
     name: str,

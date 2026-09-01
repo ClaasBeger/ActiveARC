@@ -17,6 +17,7 @@ from framework.prompting.active_arc_tools import (
     build_initial_responses_input,
     execute_tool_call,
     responses_tools_for_phase,
+    test_phase_tool_required_message,
 )
 from framework.prompting.response_logging import summarize_response, usage_totals
 
@@ -137,10 +138,21 @@ def run_active_arc_responses_loop(
         )
 
         if not function_calls:
+            assistant_text = _assistant_text(response)
+            if session.phase == "test":
+                reminder = test_phase_tool_required_message(assistant_text=assistant_text)
+                transcript[-1]["tool_results"].append(
+                    {
+                        "name": "_protocol_reminder",
+                        "result": {"ok": False, "error": reminder},
+                    }
+                )
+                pending_input = [{"role": "user", "content": reminder}]
+                continue
             last_result["usage"] = usage_totals(transcript)
             last_result["final"] = {
                 "reason": "model_stop",
-                "message": _assistant_text(response),
+                "message": assistant_text,
                 "phase": session.phase,
             }
             return last_result
