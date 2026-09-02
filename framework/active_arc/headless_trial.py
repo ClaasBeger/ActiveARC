@@ -92,7 +92,7 @@ class ActiveArcTrialSession:
                 return fn
         raise RuntimeError(f"No verifier callable for slot {self.verifier_slot!r}")
 
-    def _sample_test_pair(self) -> GridPair:
+    def _sample_test_pair(self) -> Optional[GridPair]:
         exclude: List[Grid] = []
         if self.hot_start_pair is not None:
             exclude.append(self.hot_start_pair.input)
@@ -104,11 +104,6 @@ class ActiveArcTrialSession:
             self.rng,
             exclude_inputs=exclude or None,
         )
-        if pair is None:
-            raise RuntimeError(
-                f"Could not sample a new dynamic test pair for {self.task_id!r} "
-                f"(distinct from {len(exclude)} prior example(s)); try another seed."
-            )
         return pair
 
     def train_pairs_json(self) -> List[Dict[str, List[List[int]]]]:
@@ -204,7 +199,22 @@ class ActiveArcTrialSession:
                 "error": f"finish_exploration only from explore (now: {self.phase}).",
             }
         if not self.fixed_test or self.test_pair is None:
-            self.test_pair = self._sample_test_pair()
+            exclude_count = len(self.shown_test_inputs) + (
+                1 if self.hot_start_pair is not None else 0
+            )
+            sampled = self._sample_test_pair()
+            if sampled is None:
+                return {
+                    "ok": False,
+                    "sampler_exhausted": True,
+                    "message": (
+                        f"Could not sample a new dynamic test pair for {self.task_id!r} "
+                        f"(distinct from {exclude_count} prior example(s))."
+                    ),
+                    "phase": self.phase,
+                    "query_count": self.query_count,
+                }
+            self.test_pair = sampled
             self.test_round += 1
         self.phase = "test"
         assert self.test_pair is not None

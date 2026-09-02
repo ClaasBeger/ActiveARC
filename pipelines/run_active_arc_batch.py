@@ -216,6 +216,9 @@ def main() -> None:
         "n_error": sum(1 for r in rows if r.get("ok") is False),
         "n_skipped": sum(1 for r in rows if r.get("skipped")),
         "n_correct": sum(1 for r in rows if r.get("correct") is True),
+        "n_sampler_exhausted": sum(
+            1 for r in rows if r.get("final_reason") == "sampler_exhausted"
+        ),
         "total_usage": {
             k: sum((r.get("usage") or {}).get(k, 0) for r in rows if isinstance(r.get("usage"), dict))
             for k in (

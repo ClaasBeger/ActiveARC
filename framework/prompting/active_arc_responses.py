@@ -163,6 +163,16 @@ def run_active_arc_responses_loop(
             out = execute_tool_call(session, name, arguments)
             transcript[-1]["tool_results"].append({"name": name, "result": out})
 
+            if out.get("sampler_exhausted"):
+                last_result["usage"] = usage_totals(transcript)
+                last_result["final"] = {
+                    "reason": "sampler_exhausted",
+                    "message": out.get("message"),
+                    "phase": out.get("phase", session.phase),
+                    "query_count": session.query_count,
+                }
+                return last_result
+
             if name == "submit_final_answer" and out.get("ok") and out.get("done"):
                 last_result["usage"] = usage_totals(transcript)
                 last_result["final"] = {

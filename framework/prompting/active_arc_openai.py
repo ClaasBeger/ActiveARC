@@ -123,6 +123,15 @@ def run_openai_agent_loop(
             out = execute_tool_call(session, name, tc.function.arguments)
             transcript[-1]["tool_results"].append({"name": name, "result": out})
 
+            if out.get("sampler_exhausted"):
+                last_result["final"] = {
+                    "reason": "sampler_exhausted",
+                    "message": out.get("message"),
+                    "phase": out.get("phase", session.phase),
+                    "query_count": session.query_count,
+                }
+                return last_result
+
             if name == "submit_final_answer" and out.get("ok") and out.get("done"):
                 last_result["final"] = {
                     "reason": "trial_complete",
