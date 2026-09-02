@@ -946,4 +946,9 @@ def get_custom_verifier(task_id: str) -> Optional[Callable[[Grid], Grid]]:
         return _solve_a64e4611_v5
     if task_id == "90f3ed37":
         return _solve_90f3ed37
-    return None
+    try:
+        from framework.integrations.agi2_verifiers import get_agi2_valid_verifier
+
+        return get_agi2_valid_verifier(task_id)
+    except Exception:
+        return None

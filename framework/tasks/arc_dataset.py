@@ -25,10 +25,23 @@ RE_ARC_ZIP = ROOT_DIR / "external" / "re_arc" / "re_arc.zip"
 ARC_GEN_STABLE_ZIP = ROOT_DIR / "external" / "arc_gen_stable.zip"
 
 _ARC_GEN_TASK_LIST_MODULE: ModuleType | None = None
+_ARC_GEN_V2_TASK_LIST_MODULE: ModuleType | None = None
 
 # Private seed source for dynamic ARC-GEN generation: gives each generated example a
 # fresh seed without depending on (or disturbing) the global ``random`` state.
 _DYNAMIC_GEN_RNG = random.Random()
+
+
+def _with_arc_gen_on_path(load_fn):
+    """Run *load_fn* with ``external/ARC-GEN`` on ``sys.path`` (restored after)."""
+    arc_gen_dir = ROOT_DIR / "external" / "ARC-GEN"
+    original_sys_path = list(sys.path)
+    try:
+        if str(arc_gen_dir) not in sys.path:
+            sys.path.insert(0, str(arc_gen_dir))
+        return load_fn()
+    finally:
+        sys.path = original_sys_path
 
 
 def _load_arc_original(task_id: str) -> Tuple[List[GridPair], List[Grid], List[Grid]]:
@@ -144,7 +157,7 @@ def _make_re_arc_generator(task_id: str) -> Optional[Callable[[int], List[GridPa
 
 
 def _load_arc_gen_task_list_module() -> Optional[ModuleType]:
-    """Load external/ARC-GEN/task_list.py as a module."""
+    """Load external/ARC-GEN/task_list.py as a module (ARC-AGI-1 / V1)."""
     global _ARC_GEN_TASK_LIST_MODULE
     if _ARC_GEN_TASK_LIST_MODULE is not None:
         return _ARC_GEN_TASK_LIST_MODULE
@@ -153,14 +166,10 @@ def _load_arc_gen_task_list_module() -> Optional[ModuleType]:
     if not path.exists():
         return None
 
-    arc_gen_dir = path.parent
-    original_sys_path = list(sys.path)
-    try:
+    def _load() -> Optional[ModuleType]:
+        global _ARC_GEN_TASK_LIST_MODULE
         # Ensure `from tasks.training import ...` can resolve by adding the
         # ARC-GEN root (which contains the `tasks` package) to sys.path.
-        if str(arc_gen_dir) not in sys.path:
-            sys.path.insert(0, str(arc_gen_dir))
-
         spec = importlib.util.spec_from_file_location("arc_gen_task_list", path)
         if spec is None or spec.loader is None:
             return None
@@ -171,27 +180,71 @@ def _load_arc_gen_task_list_module() -> Optional[ModuleType]:
             # If ARC-GEN's internal imports fail (e.g. missing dependencies),
             # degrade gracefully and skip exposing its generators.
             return None
-
         _ARC_GEN_TASK_LIST_MODULE = module
         return module
-    finally:
-        sys.path = original_sys_path
+
+    return _with_arc_gen_on_path(_load)
+
+
+def _load_arc_gen_v2_task_list_module() -> Optional[ModuleType]:
+    """Load external/ARC-GEN/task_list_v2.py (ARC-AGI-2 generators only)."""
+    global _ARC_GEN_V2_TASK_LIST_MODULE
+    if _ARC_GEN_V2_TASK_LIST_MODULE is not None:
+        return _ARC_GEN_V2_TASK_LIST_MODULE
+
+    path = ROOT_DIR / "external" / "ARC-GEN" / "task_list_v2.py"
+    if not path.exists():
+        return None
+
+    def _load() -> Optional[ModuleType]:
+        global _ARC_GEN_V2_TASK_LIST_MODULE
+        spec = importlib.util.spec_from_file_location("arc_gen_task_list_v2", path)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except ModuleNotFoundError:
+            return None
+        _ARC_GEN_V2_TASK_LIST_MODULE = module
+        return module
+
+    return _with_arc_gen_on_path(_load)
 
 
 def _arc_gen_id_to_task_num_and_generator(
     task_id: str,
 ) -> Optional[Tuple[int, Callable[[], Dict[str, Grid]]]]:
-    """Map ARC task_id to (task_num, generator) using ARC-GEN's task_list."""
+    """Map ARC task_id to (task_num, generator) using ARC-GEN registries.
+
+    V1 (``task_list.py``) uses numeric task indices for golf/solution paths.
+    V2 / ARC-AGI-2 (``task_list_v2.py``) has generators only — ``task_num`` is
+    returned as ``0`` (no golf verifier mapping).
+    """
     module = _load_arc_gen_task_list_module()
-    if module is None:
-        return None
-    task_list_fn = getattr(module, "task_list", None)
-    if not callable(task_list_fn):
-        return None
-    mapping: Dict[int, Tuple[str, Callable[[], Dict[str, Grid]], Callable]] = task_list_fn()  # type: ignore[misc]
-    for num, (arc_id, generator, _validator) in mapping.items():
-        if arc_id == task_id:
-            return num, generator
+    if module is not None:
+        task_list_fn = getattr(module, "task_list", None)
+        if callable(task_list_fn):
+            mapping = task_list_fn()
+            for num, entry in mapping.items():
+                # V1 shape: {num: [arc_id, generate, validate]}
+                if (
+                    isinstance(entry, (list, tuple))
+                    and len(entry) >= 2
+                    and isinstance(entry[0], str)
+                    and entry[0] == task_id
+                ):
+                    return int(num), entry[1]
+
+    v2 = _load_arc_gen_v2_task_list_module()
+    if v2 is not None:
+        task_list_fn = getattr(v2, "task_list", None)
+        if callable(task_list_fn):
+            mapping = task_list_fn()
+            entry = mapping.get(task_id)
+            # V2 shape: {arc_id: [generate, validate]}
+            if isinstance(entry, (list, tuple)) and entry and callable(entry[0]):
+                return 0, entry[0]
     return None
 
 
@@ -872,6 +925,15 @@ def load_task(task_id: str, *, load_alternative_verifiers: bool = True) -> ArcTa
             quaternary_verifier,
             quinary_verifier,
         ) = _load_alternative_verifiers(task_id)
+
+    # ARC-AGI-2 / V2: no re-ARC; attach first offline-validated AGI-2 verifier.
+    if verifier is None:
+        try:
+            from framework.integrations.agi2_verifiers import get_agi2_valid_verifier
+
+            verifier = get_agi2_valid_verifier(task_id)
+        except Exception:
+            verifier = None
 
     task = ArcTask(
         task_id=task_id,
