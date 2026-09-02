@@ -31,10 +31,27 @@ from framework.prompting.active_arc_tools import DEFAULT_OPENAI_MODEL
 from framework.tasks.arc_dataset import ARC_ORIGINAL_DIR
 
 
+def _output_basename(task_id: str) -> str:
+    """Filesystem-safe name (ConceptARC ids contain ``/``)."""
+    return task_id.replace("/", "__")
+
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Batch ActiveARC agent runs")
+    p.add_argument(
+        "--dataset",
+        choices=["arc", "conceptarc", "parc"],
+        default="arc",
+        help="Task pool: arc (default), conceptarc, or parc (P-ARC).",
+    )
     p.add_argument("--limit", type=int, default=100)
     p.add_argument("--offset", type=int, default=0)
+    p.add_argument(
+        "--per-concept-limit",
+        type=int,
+        default=None,
+        help="ConceptARC only: max exported programs per concept (e.g. 10 for originals 1–10).",
+    )
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out-dir", type=str, required=True)
     p.add_argument("--backend", choices=["responses", "chat"], default="responses")
@@ -66,9 +83,47 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _task_ids(limit: int, offset: int) -> list[str]:
-    ids = sorted(p.stem for p in ARC_ORIGINAL_DIR.glob("*.json"))
-    return ids[offset : offset + limit]
+def _conceptarc_sort_key(task_id: str) -> tuple[str, int, str]:
+    concept, name = task_id.split("/", 1)
+    digits = "".join(ch for ch in name if ch.isdigit())
+    return (concept, int(digits) if digits else 0, name)
+
+
+def _task_ids(args: argparse.Namespace) -> list[str]:
+    if args.dataset == "arc":
+        ids = sorted(p.stem for p in ARC_ORIGINAL_DIR.glob("*.json"))
+        return ids[args.offset : args.offset + args.limit]
+
+    if args.dataset == "conceptarc":
+        from framework.integrations.conceptarc_adapter import (
+            conceptarc_available,
+            list_conceptarc_concepts,
+            list_conceptarc_task_ids,
+        )
+
+        if not conceptarc_available():
+            raise SystemExit("ConceptARC programs not available.")
+        all_ids = list(list_conceptarc_task_ids())
+        if args.per_concept_limit is not None:
+            picked: list[str] = []
+            for concept in list_conceptarc_concepts():
+                concept_ids = sorted(
+                    (i for i in all_ids if i.split("/", 1)[0] == concept),
+                    key=_conceptarc_sort_key,
+                )
+                picked.extend(concept_ids[: args.per_concept_limit])
+            all_ids = sorted(picked, key=_conceptarc_sort_key)
+        return all_ids[args.offset : args.offset + args.limit]
+
+    if args.dataset == "parc":
+        from framework.tasks.parc_dataset import list_parc_task_ids, parc_available
+
+        if not parc_available():
+            raise SystemExit("P-ARC Test2 data not available.")
+        ids = list(list_parc_task_ids())
+        return ids[args.offset : args.offset + args.limit]
+
+    raise SystemExit(f"Unsupported dataset: {args.dataset}")
 
 
 def _run_one(args: argparse.Namespace, task_id: str) -> dict:
@@ -79,7 +134,7 @@ def _run_one(args: argparse.Namespace, task_id: str) -> dict:
         noisy_science=args.noisy_science,
         re_trials=args.re_trials,
         noise_probability=args.noise_probability,
-        dataset="arc",
+        dataset=args.dataset,
         fixed_test=args.fixed_test,
     )
     reasoning_effort = None if args.reasoning_effort.lower() == "none" else args.reasoning_effort
@@ -100,7 +155,7 @@ def _run_one(args: argparse.Namespace, task_id: str) -> dict:
     return build_trial_record(
         session,
         result,
-        dataset="arc",
+        dataset=args.dataset,
         hot_start=args.hot_start,
         noisy_science=args.noisy_science,
         re_trials=args.re_trials,
@@ -113,18 +168,20 @@ def main() -> None:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    task_ids = _task_ids(args.limit, args.offset)
+    task_ids = _task_ids(args)
     if not task_ids:
         raise SystemExit("No task ids selected.")
 
     manifest = {
         "started_at": datetime.now(timezone.utc).isoformat(),
+        "dataset": args.dataset,
         "backend": args.backend,
         "model": args.model or DEFAULT_OPENAI_MODEL,
         "reasoning_effort": args.reasoning_effort,
         "seed": args.seed,
         "offset": args.offset,
         "limit": args.limit,
+        "per_concept_limit": args.per_concept_limit,
         "task_ids": task_ids,
         "flags": {
             "hot_start": args.hot_start,
@@ -140,7 +197,7 @@ def main() -> None:
     t0 = time.perf_counter()
 
     for i, task_id in enumerate(task_ids, start=1):
-        out_path = out_dir / f"{task_id}.json"
+        out_path = out_dir / f"{_output_basename(task_id)}.json"
         if args.skip_existing and out_path.is_file():
             print(f"[{i}/{len(task_ids)}] skip existing {task_id}", flush=True)
             try:

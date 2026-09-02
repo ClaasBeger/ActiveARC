@@ -171,10 +171,7 @@ def build_initial_responses_input(session: ActiveArcTrialSession) -> List[Dict[s
 
 def build_task_user_message(session: ActiveArcTrialSession) -> str:
     training_pair = _primary_training_pair(session)
-    payload = {
-        "task_id": session.task_id,
-        "training_pair": training_pair,
-    }
+    payload = {"training_pair": training_pair}
     return (
         "Here is your task (JSON). Test inputs are hidden until you call finish_exploration.\n\n"
         f"```json\n{json.dumps(payload, indent=2)}\n```"

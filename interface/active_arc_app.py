@@ -498,18 +498,17 @@ def _explore_phase() -> None:
             st.session_state.query_grid = clone_grid(inp)
             try:
                 validate_grid(inp)
-            except ValueError as e:
-                st.error(f"Invalid grid: {e}")
+            except ValueError:
+                st.error("Invalid Input Grid or Rule not Applicable")
                 st.caption("Fix the grid and try again. This submission was not counted as a query.")
                 return
 
             try:
                 gold, used_slot = _run_verifier_chain(inp)
-            except RuntimeError as e:
-                st.error("Verifier error — your query was not counted.")
-                st.warning(str(e))
+            except RuntimeError:
+                st.error("Invalid Input Grid or Rule not Applicable")
                 st.caption(
-                    "Every eligible verifier failed on this input. "
+                    "This submission was not counted as a query. "
                     "Adjust the grid or try a different input."
                 )
                 return
@@ -530,9 +529,9 @@ def _explore_phase() -> None:
                     note = f"(noisy: {kind})" if corrupted else "(exact)"
                 else:
                     note = "(exact)"
-            except Exception as e:
-                st.error(f"Could not prepare output — query not counted. ({type(e).__name__})")
-                st.warning(str(e))
+            except Exception:
+                st.error("Invalid Input Grid or Rule not Applicable")
+                st.caption("This submission was not counted as a query.")
                 return
 
             st.session_state.query_count += 1
@@ -634,14 +633,13 @@ def _test_phase() -> None:
         st.session_state.test_answer_grid = clone_grid(pred)
         try:
             validate_grid(pred)
-        except ValueError as e:
-            st.error(str(e))
+        except ValueError:
+            st.error("Invalid Input Grid or Rule not Applicable")
             return
         try:
             gold, _slot = _run_verifier_chain(ti)
-        except RuntimeError as e:
-            st.error("Could not score your answer — every verifier failed on the test input.")
-            st.warning(str(e))
+        except RuntimeError:
+            st.error("Invalid Input Grid or Rule not Applicable")
             return
         ok = is_equal_grid(pred, gold)
         if st.session_state.re_trials and not ok:

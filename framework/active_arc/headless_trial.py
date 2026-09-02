@@ -20,6 +20,10 @@ from framework.tasks.base import ArcTask, Verifier
 
 Phase = Literal["explore", "test", "done"]
 
+# Model-facing message for malformed inputs / out-of-domain queries.
+# Never include verifier exception text — that leaks rule structure.
+INVALID_INPUT_OR_RULE_MESSAGE = "Invalid Input Grid or Rule not Applicable"
+
 
 def normalize_query_grid(grid: Grid) -> Grid:
     return [
@@ -137,15 +141,15 @@ class ActiveArcTrialSession:
         try:
             inp = normalize_query_grid(clone_grid(grid))
             validate_grid(inp)
-        except ValueError as e:
-            return {"ok": False, "error": f"Invalid grid: {e}"}
+        except ValueError:
+            return {"ok": False, "error": INVALID_INPUT_OR_RULE_MESSAGE}
 
         try:
             gold, used_slot = _run_verifier_chain(
                 inp, self.verifier_slot, self.valid_verifiers
             )
-        except RuntimeError as e:
-            return {"ok": False, "error": str(e)}
+        except RuntimeError:
+            return {"ok": False, "error": INVALID_INPUT_OR_RULE_MESSAGE}
 
         shown = clone_grid(gold)
         note = "(exact)"
@@ -161,11 +165,8 @@ class ActiveArcTrialSession:
                     noise_probability=self.noise_probability,
                 )
                 note = f"(noisy: {kind})" if corrupted else "(exact)"
-            except Exception as e:
-                return {
-                    "ok": False,
-                    "error": f"Could not prepare noisy output: {type(e).__name__}: {e}",
-                }
+            except Exception:
+                return {"ok": False, "error": INVALID_INPUT_OR_RULE_MESSAGE}
 
         self.query_count += 1
         matched_test_round = self._matching_shown_test_round(inp)
@@ -208,7 +209,7 @@ class ActiveArcTrialSession:
                     "ok": False,
                     "sampler_exhausted": True,
                     "message": (
-                        f"Could not sample a new dynamic test pair for {self.task_id!r} "
+                        "Could not sample a new dynamic test pair "
                         f"(distinct from {exclude_count} prior example(s))."
                     ),
                     "phase": self.phase,
@@ -245,15 +246,15 @@ class ActiveArcTrialSession:
         try:
             pred = normalize_query_grid(clone_grid(grid))
             validate_grid(pred)
-        except ValueError as e:
-            return {"ok": False, "error": str(e)}
+        except ValueError:
+            return {"ok": False, "error": INVALID_INPUT_OR_RULE_MESSAGE}
 
         try:
             gold, _slot = _run_verifier_chain(
                 ti, self.verifier_slot, self.valid_verifiers
             )
-        except RuntimeError as e:
-            return {"ok": False, "error": f"Scoring failed: {e}"}
+        except RuntimeError:
+            return {"ok": False, "error": INVALID_INPUT_OR_RULE_MESSAGE}
 
         ok = is_equal_grid(pred, gold)
         if self.re_trials and not ok:
@@ -471,6 +472,26 @@ def _create_conceptarc_trial_inputs(
     raise RuntimeError("Could not build a ConceptARC trial from any exported program.")
 
 
+def _fallback_train_pair(
+    task: ArcTask,
+    verifier: Verifier,
+    rng: random.Random,
+) -> Optional[GridPair]:
+    """Use an exported train example when the live generator cannot sample hot-start."""
+    if not task.train_pairs:
+        return None
+    order = list(range(len(task.train_pairs)))
+    rng.shuffle(order)
+    for i in order:
+        pair = task.train_pairs[i]
+        try:
+            if is_equal_grid(verifier(copy.deepcopy(pair.input)), pair.output):
+                return copy.deepcopy(pair)
+        except Exception:
+            continue
+    return None
+
+
 def _sample_hot_start_pair(
     task: ArcTask,
     verifier: Verifier,
@@ -482,6 +503,8 @@ def _sample_hot_start_pair(
         return None
     if task.arc_gen_generator is not None:
         hot = sample_consistent_dynamic_pair(task, verifier, rng)
+        if hot is None:
+            hot = _fallback_train_pair(task, verifier, rng)
         if hot is None:
             raise ValueError(
                 f"Could not sample dynamic hot-start pair for {task.task_id!r}; try another seed."
@@ -531,6 +554,8 @@ def _resolve_hot_start_pair(
 
     if task.arc_gen_generator is not None:
         hot = sample_consistent_dynamic_pair(task, verifier, rng)
+        if hot is None:
+            hot = _fallback_train_pair(task, verifier, rng)
         if hot is None:
             raise ValueError(
                 f"Could not sample dynamic hot-start pair for {task.task_id!r}; try another seed."
