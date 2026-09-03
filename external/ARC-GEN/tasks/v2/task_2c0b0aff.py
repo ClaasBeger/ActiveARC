@@ -16,6 +16,8 @@
 
 import common
 
+_MAX_ATTEMPTS = 100_000
+
 
 def generate(width=None, height=None, wide=None, tall=None, brow=None,
              bcol=None, colors=None):
@@ -35,7 +37,7 @@ def generate(width=None, height=None, wide=None, tall=None, brow=None,
     width, height = common.randint(18, 24), common.randint(18, 24)
     boxes = common.randint(3, 4)
     counts = sorted(common.sample(list(range(1, 5)), boxes))
-    while True:
+    for _ in range(_MAX_ATTEMPTS):
       # First, place and plot the sky blue rectangles.
       wides = [common.randint(7, 11) for _ in range(boxes)]
       talls = [common.randint(7, 11) for _ in range(boxes)]
@@ -67,6 +69,8 @@ def generate(width=None, height=None, wide=None, tall=None, brow=None,
             break
         if not good: break
       if good: break
+    else:
+      raise RuntimeError("generation exhausted")
     for prow, pcol, length in zip(prows, pcols, plengths):
       if length == 1:
         grid[prow][pcol] = 3
