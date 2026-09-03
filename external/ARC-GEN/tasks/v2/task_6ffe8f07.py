@@ -16,6 +16,8 @@
 
 import common
 
+_MAX_ATTEMPTS = 100_000
+
 
 def generate(width=None, height=None, wides=None, talls=None, brows=None, bcols=None, colors=None):
   """Returns input and output grids according to the given parameters.
@@ -33,7 +35,7 @@ def generate(width=None, height=None, wides=None, talls=None, brows=None, bcols=
   if width is None:
     width, height = common.randint(18, 19), common.randint(18, 19)
     num_boxes = common.randint(4, 12)
-    while True:
+    for _ in range(_MAX_ATTEMPTS):
       wides = [common.randint(2, 7) for _ in range(num_boxes)]
       talls = [common.randint(2, 7) for _ in range(num_boxes)]
       wides[-1] = common.randint(2, 13)  # Sometimes one of them is very long.
@@ -43,6 +45,8 @@ def generate(width=None, height=None, wides=None, talls=None, brows=None, bcols=
       colors = [common.randint(1, 2) for _ in range(num_boxes)]
       colors[0] = 8
       if len(set(colors)) == 3: break
+    else:
+      raise RuntimeError("generation exhausted")
 
   grid, output = common.grids(width, height)
   for wide, tall, brow, bcol, color in zip(wides, talls, brows, bcols, colors):

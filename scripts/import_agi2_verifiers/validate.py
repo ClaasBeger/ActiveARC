@@ -20,6 +20,7 @@ from .paths import ARC_ORIGINAL, CANDIDATES, LOGS, ROOT, VALID
 logger = logging.getLogger(__name__)
 
 N_DYNAMIC = 250
+GENERATION_TIMEOUT_S = 10.0
 TIMEOUT_PASS1 = 5.0
 TIMEOUT_PASS2 = 60.0
 
@@ -154,7 +155,7 @@ def _generate_dynamic_pairs(task_id: str, n: int = N_DYNAMIC) -> Tuple[List[Tupl
             if hasattr(signal, "SIGALRM"):
                 old = signal.signal(signal.SIGALRM, _alarm_handler)
                 try:
-                    signal.setitimer(signal.ITIMER_REAL, 2.0)
+                    signal.setitimer(signal.ITIMER_REAL, GENERATION_TIMEOUT_S)
                     example = generator()
                 except _CaseTimeout:
                     failures += 1

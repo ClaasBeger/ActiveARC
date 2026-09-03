@@ -14,6 +14,7 @@
 
 """Common utility functions for ARC-GEN."""
 
+import copy
 import math
 import random
 
@@ -286,25 +287,23 @@ def is_surrounded(bitmap, r, c):
 
 
 def overlaps(rows, cols, wides, talls, spacing=0):
-  result = False
   for j in range(len(rows)):
     for i in range(j):
       if rows[i] + talls[i] + spacing <= rows[j]: continue
       if rows[j] + talls[j] + spacing <= rows[i]: continue
       if cols[i] + wides[i] + spacing <= cols[j]: continue
       if cols[j] + wides[j] + spacing <= cols[i]: continue
-      result = True
-  return result
+      return True
+  return False
 
 
 def overlaps_1d(cols, wides, spacing=0):
-  result = False
   for j in range(len(cols)):
     for i in range(j):
       if cols[i] + wides[i] + spacing <= cols[j]: continue
       if cols[j] + wides[j] + spacing <= cols[i]: continue
-      result = True
-  return result
+      return True
+  return False
 
 
 def randint(start, stop):
@@ -501,3 +500,249 @@ def maroon():
 def set_colors(colors):
   global internal_colors
   internal_colors = colors
+
+
+# ---------------------------------------------------------------------------
+# AGI-2 / upstream helpers (merged from google/ARC-GEN common.py).
+# Kept additive so existing V1 generator behavior is unchanged.
+# ---------------------------------------------------------------------------
+
+def all_connected(ingrid, color):
+  ingrid = copy.deepcopy(ingrid)
+  width, height = len(ingrid[0]), len(ingrid)
+  row, col = -1, -1
+  for r in range(height):
+    for c in range(width):
+      if ingrid[r][c] == color: row, col = r, c
+  if row == -1 or col == -1: return True
+  queue = [(row, col)]
+  while queue:
+    r, c = queue.pop()
+    neighbors = [(r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)]
+    for nr, nc in neighbors:
+      if nr < 0 or nr >= height or nc < 0 or nc >= width: continue
+      if ingrid[nr][nc] == color:
+        ingrid[nr][nc] = -1
+        queue.append((nr, nc))
+  for r in range(height):
+    for c in range(width):
+      if ingrid[r][c] == color: return False
+  return True
+
+def backslash(ingrid, length, row, col, color):
+  """Draws a backslash in a grid."""
+  for i in range(length):
+    ingrid[row + i][col + i] = color
+
+def backslash_obscured(ingrid, length, row, col, color):
+  for i in range(length):
+    if ingrid[row + i][col + i] != color: return True
+  return False
+
+def backslash_visible(ingrid, length, row, col, color):
+  visible_corners = 0
+  if ingrid[row][col] == color: visible_corners += 1
+  if ingrid[row + length - 1][col + length - 1] == color: visible_corners += 1
+  return visible_corners == 2
+
+def connected_sprite(width=3, height=3, tries=5):
+  """Creates a connected sprite by removing some pixels from a grid."""
+  while True:
+    rows, cols = conway_sprite(width, height, tries)
+    pixels = sorted(list(zip(rows, cols)))
+    if connected(pixels): break
+  return pixels
+
+def deepcopy(ingrid):
+  return copy.deepcopy(ingrid)
+
+def diagonally_connected_sprite(width=3, height=3, tries=5):
+  """Creates a diagonally connected sprite by removing pixels from a grid."""
+  while True:
+    rows, cols = conway_sprite(width, height, tries)
+    pixels = sorted(list(zip(rows, cols)))
+    if diagonally_connected(pixels): break
+  return pixels
+
+def diamond(ingrid, row, col, length, color, expected_color=None):
+  for r in range(-length, length + 1):
+    for c in range(-length, length + 1):
+      radius = abs(r) + abs(c)
+      if radius == length:
+        if expected_color is not None:
+          if get_pixel(ingrid, row + r, col + c) not in [-1, expected_color]:
+            return False
+        draw(ingrid, row + r, col + c, color)
+  return True
+
+def diamond_check_inside(ingrid, row, col, length, color):
+  for r in range(-length, length + 1):
+    for c in range(-length, length + 1):
+      radius = abs(r) + abs(c)
+      if radius < length and get_pixel(ingrid, row + r, col + c) not in [-1, color]:
+        return False
+  return True
+
+def fill(ingrid, r, c, color):
+  prev = ingrid[r][c]
+  queue = [(r, c)]
+  while queue:
+    r, c = queue.pop()
+    if get_pixel(ingrid, r, c) != prev: continue
+    ingrid[r][c] = color
+    queue.extend([(r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)])
+
+def flatten(ingrid):
+  flattened = []
+  for row in ingrid:
+    flattened.extend(row)
+  return flattened
+
+def flip(ingrid):
+  return ingrid[::-1]
+
+def flop(ingrid):
+  return [row[::-1] for row in ingrid]
+
+def hollow_rect(ingrid, width, height, row, col, color, must_be_zero=False):
+  """Draws a hollow rectangle in a grid."""
+  for r in range(height):
+    for c in range(width):
+      if r in [0, height - 1] or c in [0, width - 1]:
+        if must_be_zero and get_pixel(ingrid, row + r, col + c) not in [-1, 0]:
+          return False
+        draw(ingrid, row + r, col + c, color)
+  return True
+
+def isclose(a, b):
+  return math.isclose(a, b)
+
+def is_symmetric(colors):
+  for r in range(3):
+    for c in range(3):
+      if colors[r * 3 + c] != colors[r * 3 + 2 - c]: return False
+      if colors[r * 3 + c] != colors[(2 - r) * 3 + c]: return False
+  return True
+
+def letter_map():
+  return {
+      "+": [(0, 1), (1, 0), (1, 1), (1, 2), (2, 1)],
+      ".": [(1, 1)],
+      "/": [(0, 0), (0, 1), (1, 0), (1, 1), (1, 2), (2, 1), (2, 2)],
+      "1": [(0, 0), (0, 1), (1, 1), (2, 0), (2, 1), (2, 2)],
+      "2": [(0, 0), (0, 1), (1, 1), (2, 1), (2, 2)],
+      "4": [(0, 0), (1, 0), (1, 1), (1, 2), (2, 2)],
+      "7": [(0, 0), (0, 1), (0, 2), (1, 2), (2, 2)],
+      ":": [(0, 0), (1, 1), (1, 2), (2, 0)],
+      "=": [(0, 0), (0, 1), (0, 2), (2, 0), (2, 1), (2, 2)],
+      ">": [(0, 0), (0, 1), (1, 2), (2, 0), (2, 1)],
+      "?": [(0, 1), (1, 0), (1, 1), (2, 2)],
+      "@": [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (2, 0), (2, 1), (2, 2)],
+      "A": [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (2, 0), (2, 2)],
+      "C": [(0, 0), (0, 1), (0, 2), (1, 0), (2, 0), (2, 1), (2, 2)],
+      "H": [(0, 0), (0, 2), (1, 0), (1, 1), (1, 2), (2, 0), (2, 2)],
+      "I": [(0, 0), (0, 1), (0, 2), (1, 1), (2, 0), (2, 1), (2, 2)],
+      "L": [(0, 0), (1, 0), (2, 0), (2, 1), (2, 2)],
+      "N": [(0, 0), (0, 1), (0, 2), (1, 0), (1, 2), (2, 0), (2, 2)],
+      "O": [(0, 0), (0, 1), (0, 2), (1, 0), (1, 2), (2, 0), (2, 1), (2, 2)],
+      "T": [(0, 0), (0, 1), (0, 2), (1, 1), (2, 1)],
+      "U": [(0, 0), (0, 2), (1, 0), (1, 2), (2, 0), (2, 1), (2, 2)],
+      "V": [(0, 0), (0, 2), (1, 0), (1, 1), (1, 2), (2, 1)],
+      "X": [(0, 0), (0, 2), (1, 1), (2, 0), (2, 2)],
+      "Y": [(0, 0), (0, 2), (1, 1), (2, 1)],
+      "|": [(0, 0), (0, 2), (1, 0), (1, 2), (2, 0), (2, 2)],
+  }
+
+def rect(ingrid, width, height, row, col, color):
+  """Draws a rectangle in a grid."""
+  for r in range(height):
+    for c in range(width):
+      draw(ingrid, row + r, col + c, color)
+
+def rect_obscured(ingrid, width, height, row, col, color):
+  """Determines if a rectangle is (partially) obscured."""
+  for r in range(height):
+    for c in range(width):
+      if ingrid[row + r][col + c] != color: return True
+  return False
+
+def rect_visible(ingrid, width, height, row, col, color):
+  visible_corners = 0
+  if ingrid[row][col] == color: visible_corners += 1
+  if ingrid[row + height - 1][col] == color: visible_corners += 1
+  if ingrid[row][col + width - 1] == color: visible_corners += 1
+  if ingrid[row + height - 1][col + width - 1] == color: visible_corners += 1
+  return visible_corners >= 3
+
+def remove_duplicates(original_list):
+  return list(dict.fromkeys(original_list))
+
+def shave(wide, tall, row, col):
+  """Shaves a rectangle down from some direction."""
+  wides, talls, rows, cols = [], [], [], []
+  direction = randint(0, 3)
+  if direction in [0, 1]:
+    left, right = col, col + wide
+    for r in range(tall):
+      wides.append(right - left)
+      talls.append(1)
+      rows.append((row + r) if direction == 0 else (row + tall - 1 - r))
+      cols.append(left)
+      diff = randint(0, 1)
+      if left + diff < right: left += diff
+      diff = randint(0, 1)
+      if left < right - diff: right -= diff
+  if direction in [2, 3]:
+    bottom, top = row, row + tall
+    for c in range(wide):
+      wides.append(1)
+      talls.append(top - bottom)
+      rows.append(bottom)
+      cols.append((col + c) if direction == 2 else (col + wide - 1 - c))
+      diff = randint(0, 1)
+      if bottom + diff < top: bottom += diff
+      diff = randint(0, 1)
+      if bottom < top - diff: top -= diff
+  return wides, talls, rows, cols
+
+def slash(ingrid, length, row, col, color):
+  """Draws a slash in a grid."""
+  for i in range(length):
+    ingrid[row + i][col + length - 1 - i] = color
+
+def slash_obscured(ingrid, length, row, col, color):
+  for i in range(length):
+    if ingrid[row + i][col + length - 1 - i] != color: return True
+  return False
+
+def slash_visible(ingrid, length, row, col, color):
+  visible_corners = 0
+  if ingrid[row][col + length - 1] == color: visible_corners += 1
+  if ingrid[row + length - 1][col] == color: visible_corners += 1
+  return visible_corners == 2
+
+def some_abutted(rows, cols, wides, talls):
+  for j in range(len(rows)):
+    for i in range(j):
+      if rows[i] + talls[i] == rows[j] or rows[j] + talls[j] == rows[i]:
+        if cols[i] + wides[i] <= cols[j] or cols[j] + wides[j] <= cols[i]:
+          continue
+        return True
+      if cols[i] + wides[i] == cols[j] or cols[j] + wides[j] == cols[i]:
+        if rows[i] + talls[i] <= rows[j] or rows[j] + talls[j] <= rows[i]:
+          continue
+        return True
+  return False
+
+def int_sqrt(x):
+  return int(math.sqrt(x))
+
+def upsample(ingrid, mult):
+  width, height = len(ingrid[0]), len(ingrid)
+  output = grid(width * mult, height * mult)
+  for row in range(height):
+    for col in range(width):
+      for dr in range(mult):
+        for dc in range(mult):
+          output[row * mult + dr][col * mult + dc] = ingrid[row][col]
+  return output

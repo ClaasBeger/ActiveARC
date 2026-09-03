@@ -16,6 +16,8 @@
 
 import common
 
+_MAX_ATTEMPTS = 100_000
+
 
 def generate(width=None, height=None, rows=None, cols=None, lefts=None,
              rights=None, tops=None, bottoms=None, colors=None, prows=None,
@@ -148,7 +150,7 @@ def generate(width=None, height=None, rows=None, cols=None, lefts=None,
     return grid, output, kept_prows, kept_pcols
 
   if width is None:
-    while True:
+    for _ in range(_MAX_ATTEMPTS):
       base = common.randint(18, 28)
       width, height = base + common.randint(-2, 2), base + common.randint(-2, 2)
       num_rows, num_cols = common.randint(2, 3), common.randint(2, 3)
@@ -184,6 +186,8 @@ def generate(width=None, height=None, rows=None, cols=None, lefts=None,
       if grid:
         prows, pcols = kept_prows, kept_pcols
         break
+    else:
+      raise RuntimeError("generation exhausted")
 
   grid, output, _, _ = draw()
   return {"input": grid, "output": output}
