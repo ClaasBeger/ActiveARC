@@ -36,15 +36,11 @@ def list_valid_verifiers(task: ArcTask) -> List[Tuple[VerifierSlot, Verifier]]:
         return []
 
     fast = list_valid_verifiers_from_csv(task)
-    if fast is not None:
-        out = list(fast)
-    else:
-        from framework.verifier_selection import _legacy_valid_verifiers
-
-        out = _legacy_valid_verifiers(task)
+    out: List[Tuple[VerifierSlot, Verifier]] = list(fast) if fast is not None else []
 
     # Pre-validated ARC-AGI-2 standalone verifiers (official + 250 ARC-GEN).
     # Already offline-audited; do not re-probe dynamic50 here.
+    added_agi2 = False
     try:
         from framework.integrations.agi2_verifiers import get_agi2_valid_verifiers
 
@@ -54,8 +50,14 @@ def list_valid_verifiers(task: ArcTask) -> List[Tuple[VerifierSlot, Verifier]]:
                 continue
             out.append(("custom", fn))
             seen.add(id(fn))
+            added_agi2 = True
     except Exception:
         pass
+
+    if fast is None and not added_agi2:
+        from framework.verifier_selection import _legacy_valid_verifiers
+
+        out = _legacy_valid_verifiers(task)
 
     _VALID_VERIFIERS_CACHE[task.task_id] = out
     return out

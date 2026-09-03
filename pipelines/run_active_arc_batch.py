@@ -6,6 +6,9 @@ Example::
     python -m pipelines.run_active_arc_batch --limit 100 --seed 0 \\
         --out-dir experiments/runs/batch100_seed0
 
+    python -m pipelines.run_active_arc_batch --dataset arc2 --limit 200 --seed 0 \\
+        --out-dir experiments/runs/arc_agi_2_seed0
+
 Writes one JSON per task plus a rolling ``summary.jsonl`` and final ``summary.json``.
 """
 
@@ -40,9 +43,10 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Batch ActiveARC agent runs")
     p.add_argument(
         "--dataset",
-        choices=["arc", "conceptarc", "parc"],
+        choices=["arc", "arc2", "conceptarc", "parc"],
         default="arc",
-        help="Task pool: arc (default), conceptarc, or parc (P-ARC).",
+        help="Task pool: arc (ARC-AGI-1-style originals), arc2 (validated ARC-AGI-2), "
+        "conceptarc, or parc (P-ARC).",
     )
     p.add_argument("--limit", type=int, default=100)
     p.add_argument("--offset", type=int, default=0)
@@ -92,6 +96,14 @@ def _conceptarc_sort_key(task_id: str) -> tuple[str, int, str]:
 def _task_ids(args: argparse.Namespace) -> list[str]:
     if args.dataset == "arc":
         ids = sorted(p.stem for p in ARC_ORIGINAL_DIR.glob("*.json"))
+        return ids[args.offset : args.offset + args.limit]
+
+    if args.dataset == "arc2":
+        from framework.integrations.agi2_verifiers import list_agi2_valid_task_ids
+
+        ids = list_agi2_valid_task_ids()
+        if not ids:
+            raise SystemExit("No validated ARC-AGI-2 verifiers under external/agi2_verifiers/valid.")
         return ids[args.offset : args.offset + args.limit]
 
     if args.dataset == "conceptarc":

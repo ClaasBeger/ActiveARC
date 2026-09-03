@@ -23,8 +23,8 @@ def is_equal_grid(a: Grid, b: Grid) -> bool:
     try:
         if len(a) != len(b):
             return False
-        return all(row_a == row_b for row_a, row_b in zip(a, b))
-    except TypeError:
+        return all(list(row_a) == list(row_b) for row_a, row_b in zip(a, b))
+    except (TypeError, ValueError):
         return False
 
 

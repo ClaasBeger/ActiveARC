@@ -24,7 +24,16 @@ def _load_verify(path: Path) -> Optional[Verifier]:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         fn = getattr(mod, "verify", None)
-        return fn if callable(fn) else None
+        if not callable(fn):
+            return None
+
+        def _verify(input_grid, _fn=fn):
+            got = _fn(input_grid)
+            if hasattr(got, "tolist"):
+                got = got.tolist()
+            return [[int(c) for c in row] for row in got]
+
+        return _verify
     except Exception:
         return None
 
@@ -49,6 +58,11 @@ def _index() -> Dict[str, List[Tuple[str, Path]]]:
 
 def clear_agi2_verifier_cache() -> None:
     _index.cache_clear()
+
+
+def list_agi2_valid_task_ids() -> List[str]:
+    """Task ids with ≥1 promoted valid AGI-2 verifier."""
+    return sorted(_index())
 
 
 def list_agi2_valid_candidate_ids(task_id: str) -> List[str]:

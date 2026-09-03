@@ -16,6 +16,8 @@
 
 import common
 
+_MAX_ATTEMPTS = 100_000
+
 
 def generate(width=None, height=None, colors=None):
   """Returns input and output grids according to the given parameters.
@@ -50,17 +52,20 @@ def generate(width=None, height=None, colors=None):
     return grid, output
 
   if width is None:
-    width = height = 2 * common.randint(3, 7) + 1
-    colors = common.random_colors(common.randint(3, height // 2))
-    while True:
+    for _ in range(_MAX_ATTEMPTS):
+      width = height = 2 * common.randint(3, 7) + 1
+      colors = common.random_colors(common.randint(3, height // 2))
       lengths = [common.randint(1, len(colors)) for _ in colors]
-      if sum(lengths) + 2 == height: break
-    while True:
+      if sum(lengths) + 2 == height:
+        break
+    else:
+      raise RuntimeError("generation exhausted")
+    for _ in range(_MAX_ATTEMPTS):
       offset = 1
       grid = common.grid(width, height)
       for i, color in enumerate(colors):
-        spacing = common.randint(1, width // 2 - 3)
-        while True:
+        spacing = common.randint(1, max(1, width // 2 - 3))
+        for _ in range(_MAX_ATTEMPTS):
           sprite = common.grid(width, lengths[i])
           for r in range(lengths[i]):
             for c in range(spacing, width - spacing):
@@ -75,6 +80,8 @@ def generate(width=None, height=None, colors=None):
               pixels.append((r, c))
             if not covered: good = False
           if good and pixels: break
+        else:
+          raise RuntimeError("generation exhausted")
         for r in range(lengths[i]):
           for c in range(1, width - 1):
             grid[offset + r][c] = sprite[r][c]
@@ -82,6 +89,8 @@ def generate(width=None, height=None, colors=None):
       colors = common.flatten(grid)
       grid, _ = draw()
       if grid: break
+    else:
+      raise RuntimeError("generation exhausted")
 
   grid, output = draw()
   return {"input": grid, "output": output}

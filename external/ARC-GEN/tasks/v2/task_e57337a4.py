@@ -16,6 +16,8 @@
 
 import common
 
+_MAX_ATTEMPTS = 100_000
+
 
 def generate(rows=None, cols=None, color=None):
   """Returns input and output grids according to the given parameters.
@@ -27,14 +29,16 @@ def generate(rows=None, cols=None, color=None):
   """
 
   if rows is None:
-    rows, cols = [], []
-    while True:
+    for _ in range(_MAX_ATTEMPTS):
+      rows, cols = [], []
       for r in range(3):
         for c in range(3):
           if common.randint(0, 3): continue
           rows.append(5 * r + common.randint(0, 4))
           cols.append(5 * c + common.randint(0, 4))
       if len(rows) in [1, 2, 3]: break
+    else:
+      raise RuntimeError("generation exhausted")
     color = common.random_color()
 
   grid, output = common.grid(15, 15, color), common.grid(3, 3, color)
