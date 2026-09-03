@@ -955,12 +955,36 @@ def load_task(task_id: str, *, load_alternative_verifiers: bool = True) -> ArcTa
     return task
 
 
+def list_arc_agi_1_task_ids() -> List[str]:
+    """Official ARC-AGI-1 training ids (400).
+
+    ``external/arc_original_train`` also holds ARC-AGI-2 JSONs, so callers must
+    not glob that directory when they want the AGI-1 split.
+    """
+    ids: List[str] = []
+    module = _load_arc_gen_task_list_module()
+    if module is not None:
+        task_list_fn = getattr(module, "task_list", None)
+        if callable(task_list_fn):
+            for entry in task_list_fn().values():
+                if isinstance(entry, (list, tuple)) and entry and isinstance(entry[0], str):
+                    ids.append(entry[0])
+    if not ids:
+        from framework.verifier_selection import eligible_task_ids_from_csv
+
+        ids = list(eligible_task_ids_from_csv())
+    if ARC_ORIGINAL_DIR.exists():
+        present = {p.stem for p in ARC_ORIGINAL_DIR.glob("*.json")}
+        ids = [tid for tid in ids if tid in present]
+    return sorted(set(ids))
+
+
 def iter_tasks(
     split: Optional[str] = None,
     *,
     source: Optional[TaskSource] = None,
 ) -> Iterator[ArcTask]:
-    """Iterate over tasks from the original ARC JSONs."""
+    """Iterate over the ARC-AGI-1 training split."""
     if source not in (None, TaskSource.ORIGINAL_ARC):
         raise ValueError(
             f"iter_tasks currently only supports source={TaskSource.ORIGINAL_ARC!r}"
@@ -970,13 +994,13 @@ def iter_tasks(
     if split not in (None, "train"):
         raise ValueError("Only split='train' (or None) is supported at the moment.")
 
-    if not ARC_ORIGINAL_DIR.exists():
+    ids = list_arc_agi_1_task_ids()
+    if not ids:
         raise FileNotFoundError(
-            f"Missing arc_original_train directory at {ARC_ORIGINAL_DIR}"
+            f"No ARC-AGI-1 training tasks found (looked in {ARC_ORIGINAL_DIR})"
         )
 
-    for path in sorted(ARC_ORIGINAL_DIR.glob("*.json")):
-        task_id = path.stem
+    for task_id in ids:
         yield load_task(task_id)
 
 

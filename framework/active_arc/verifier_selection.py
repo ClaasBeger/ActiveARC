@@ -6,7 +6,7 @@ from typing import Dict, Iterator, List, Optional, Tuple
 
 from framework.dimensions.classification_distribution import VerifierSlot
 from framework.grids import GridPair, is_equal_grid
-from framework.tasks.arc_dataset import ARC_ORIGINAL_DIR, load_task
+from framework.tasks.arc_dataset import list_arc_agi_1_task_ids, load_task
 from framework.tasks.base import ArcTask, Verifier
 from framework.verifier_selection import (
     clear_verifier_csv_cache,
@@ -74,11 +74,7 @@ def pick_random_verifier(
 
 
 def _list_original_task_ids() -> List[str]:
-    if not ARC_ORIGINAL_DIR.exists():
-        return []
-    ids = [p.stem for p in ARC_ORIGINAL_DIR.glob("*.json")]
-    ids.sort()
-    return ids
+    return list_arc_agi_1_task_ids()
 
 
 def iter_eligible_tasks(rng: random.Random) -> Iterator[Tuple[str, ArcTask]]:

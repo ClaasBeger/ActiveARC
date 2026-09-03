@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -16,19 +18,30 @@ VALID_DIR = ROOT_DIR / "external" / "agi2_verifiers" / "valid"
 Verifier = Callable[[Grid], Grid]
 
 
+def _mute_stdio():
+    """Many promoted solvers still run a self-test (and print PASS/SOLVED) at import."""
+    stack = ExitStack()
+    sink = io.StringIO()
+    stack.enter_context(redirect_stdout(sink))
+    stack.enter_context(redirect_stderr(sink))
+    return stack
+
+
 def _load_verify(path: Path) -> Optional[Verifier]:
     try:
         spec = importlib.util.spec_from_file_location(f"agi2_valid_{path.stem}", path)
         if spec is None or spec.loader is None:
             return None
         mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        with _mute_stdio():
+            spec.loader.exec_module(mod)
         fn = getattr(mod, "verify", None)
         if not callable(fn):
             return None
 
         def _verify(input_grid, _fn=fn):
-            got = _fn(input_grid)
+            with _mute_stdio():
+                got = _fn(input_grid)
             if hasattr(got, "tolist"):
                 got = got.tolist()
             return [[int(c) for c in row] for row in got]

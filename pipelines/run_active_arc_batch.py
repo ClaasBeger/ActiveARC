@@ -31,7 +31,7 @@ from framework.active_arc.trial_record import build_trial_record
 from framework.prompting.active_arc_openai import run_openai_agent_loop
 from framework.prompting.active_arc_responses import run_active_arc_responses_loop
 from framework.prompting.active_arc_tools import DEFAULT_OPENAI_MODEL
-from framework.tasks.arc_dataset import ARC_ORIGINAL_DIR
+from framework.tasks.arc_dataset import list_arc_agi_1_task_ids
 
 
 def _output_basename(task_id: str) -> str:
@@ -45,7 +45,7 @@ def _parse_args() -> argparse.Namespace:
         "--dataset",
         choices=["arc", "arc2", "conceptarc", "parc"],
         default="arc",
-        help="Task pool: arc (ARC-AGI-1-style originals), arc2 (validated ARC-AGI-2), "
+        help="Task pool: arc (ARC-AGI-1 training, 400 ids), arc2 (validated ARC-AGI-2), "
         "conceptarc, or parc (P-ARC).",
     )
     p.add_argument("--limit", type=int, default=100)
@@ -95,7 +95,9 @@ def _conceptarc_sort_key(task_id: str) -> tuple[str, int, str]:
 
 def _task_ids(args: argparse.Namespace) -> list[str]:
     if args.dataset == "arc":
-        ids = sorted(p.stem for p in ARC_ORIGINAL_DIR.glob("*.json"))
+        ids = list_arc_agi_1_task_ids()
+        if not ids:
+            raise SystemExit("No ARC-AGI-1 training tasks found.")
         return ids[args.offset : args.offset + args.limit]
 
     if args.dataset == "arc2":
