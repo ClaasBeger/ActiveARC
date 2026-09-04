@@ -288,6 +288,90 @@ class ActiveArcTrialSession:
         }
 
 
+def _create_arc2_trial_inputs(
+    rng: random.Random,
+    task_id: Optional[str],
+    *,
+    hot_start: bool,
+    fixed_test: bool,
+) -> Tuple[
+    str,
+    ArcTask,
+    VerifierSlot,
+    Verifier,
+    Optional[GridPair],
+    List[Tuple[VerifierSlot, Verifier]],
+    Optional[GridPair],
+]:
+    """Pick a validated ARC-AGI-2 task + verifier + optional hot-start pair."""
+    from framework.integrations.agi2_verifiers import list_agi2_valid_task_ids
+
+    ids = list(list_agi2_valid_task_ids())
+    if not ids:
+        raise RuntimeError(
+            "No validated ARC-AGI-2 verifiers under external/agi2_verifiers/valid."
+        )
+
+    def _build(t: ArcTask) -> Optional[
+        Tuple[
+            str,
+            ArcTask,
+            VerifierSlot,
+            Verifier,
+            Optional[GridPair],
+            List[Tuple[VerifierSlot, Verifier]],
+            Optional[GridPair],
+        ]
+    ]:
+        valid = list_valid_verifiers(t)
+        if not valid:
+            return None
+        sl, ver = rng.choice(valid)
+        try:
+            hot = _sample_hot_start_pair(t, ver, rng, hot_start=hot_start)
+            if fixed_test:
+                exclude = [hot.input] if hot is not None else []
+                tp = sample_consistent_dynamic_pair(
+                    t, ver, rng, exclude_inputs=exclude or None
+                )
+                if tp is None:
+                    return None
+            else:
+                tp = None
+        except ValueError:
+            return None
+        return t.task_id, t, sl, ver, tp, valid, hot
+
+    if task_id is not None:
+        if task_id not in ids:
+            raise ValueError(
+                f"Task {task_id!r} is not in the validated ARC-AGI-2 set "
+                f"({len(ids)} tasks)."
+            )
+        task = load_task(task_id, load_alternative_verifiers=False)
+        built = _build(task)
+        if built is None:
+            raise ValueError(
+                f"Could not build an ARC-AGI-2 trial for {task_id!r}; try another seed."
+            )
+        return built
+
+    order = ids[:]
+    rng.shuffle(order)
+    for cand in order:
+        try:
+            task = load_task(cand, load_alternative_verifiers=False)
+        except Exception:
+            continue
+        built = _build(task)
+        if built is not None:
+            return built
+    raise RuntimeError(
+        "Could not build an ARC-AGI-2 trial from any validated task. "
+        "Check external/agi2_verifiers/valid and ARC-GEN V2 generators."
+    )
+
+
 def _create_parc_trial_inputs(
     rng: random.Random,
     task_id: Optional[str],
@@ -593,8 +677,9 @@ def create_trial_session(
 ) -> ActiveArcTrialSession:
     """Build a trial matching the Streamlit app (random eligible task or fixed ``task_id``).
 
-    ``dataset`` selects the task pool: ``"arc"`` (default, ARC-AGI original),
-    ``"conceptarc"`` (ConceptARC DSL programs), or ``"parc"`` (P-ARC).
+    ``dataset`` selects the task pool: ``"arc"`` (default, ARC-AGI-1 training),
+    ``"arc2"`` (validated ARC-AGI-2), ``"conceptarc"`` (ConceptARC DSL programs),
+    or ``"parc"`` (P-ARC).
 
     For ConceptARC, ``sample_family=True`` or ``task_id`` of the form ``sample``,
     ``sample/<concept>``, or ``<concept>/sample`` invents a new DSL task family
@@ -627,6 +712,10 @@ def create_trial_session(
     elif dataset == "parc":
         tid, task, slot, verifier, test_pair, valid_list = _create_parc_trial_inputs(
             rng, task_id
+        )
+    elif dataset == "arc2":
+        tid, task, slot, verifier, test_pair, valid_list, hot = _create_arc2_trial_inputs(
+            rng, task_id, hot_start=hot_start, fixed_test=fixed_test
         )
     elif task_id is not None:
         task = load_task(task_id, load_alternative_verifiers=False)

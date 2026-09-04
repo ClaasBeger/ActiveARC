@@ -16,8 +16,12 @@ if str(ROOT_DIR) not in sys.path:
 
 from framework.active_arc.headless_trial import create_trial_session
 from framework.active_arc.query_noise import maybe_corrupt_query_output
-from framework.active_arc.verifier_selection import list_valid_verifiers
+from framework.active_arc.verifier_selection import (
+    list_valid_verifiers,
+    sample_consistent_dynamic_pair,
+)
 from framework.integrations.conceptarc_adapter import list_conceptarc_task_ids
+from framework.integrations.agi2_verifiers import list_agi2_valid_task_ids
 from framework.tasks.parc_dataset import list_parc_task_ids
 from framework.dimensions.classification_distribution import VerifierSlot
 from framework.grids import Grid, GridPair, clone_grid, is_equal_grid, validate_grid
@@ -77,18 +81,19 @@ def _parse_cli() -> argparse.Namespace:
         type=str,
         default=None,
         help=(
-            "Task id (ARC: 8eb1be9a; ConceptARC: count/count11; P-ARC: test2_t1 or t1). "
+            "Task id (ARC-AGI-1/2: 8eb1be9a or 00576224; ConceptARC: count/count11; "
+            "P-ARC: test2_t1 or t1). "
             "ConceptARC also accepts sample, sample/<concept>, or <concept>/sample "
             "to invent a new DSL family online."
         ),
     )
     p.add_argument(
         "--dataset",
-        choices=["arc", "conceptarc", "parc"],
+        choices=["arc", "arc2", "conceptarc", "parc"],
         default="arc",
         help=(
-            "Task pool: arc (ARC-AGI original, default), conceptarc (ConceptARC DSL), "
-            "or parc (P-ARC)."
+            "Task pool: arc (ARC-AGI-1 training, default), arc2 (validated ARC-AGI-2), "
+            "conceptarc (ConceptARC DSL), or parc (P-ARC)."
         ),
     )
     p.add_argument(
@@ -197,6 +202,52 @@ def _ordered_verifier_chain() -> List[Tuple[VerifierSlot, Verifier]]:
     return first + rest
 
 
+def _trial_verifier() -> Optional[Verifier]:
+    verifier = st.session_state.get("verifier")
+    if verifier is not None:
+        return verifier
+    chain = _session_valid_verifiers()
+    return chain[0][1] if chain else None
+
+
+def _ensure_test_pair() -> bool:
+    """Sample a live generator test pair unless a fixed test is already held.
+
+    Streamlit trials default to ``fixed_test=False``, so ``create_trial_session``
+    leaves ``test_pair`` as ``None`` and the pair is drawn when exploration ends
+    (same as ``ActiveArcTrialSession.finish_exploration``).
+    """
+    fixed = bool(st.session_state.get("fixed_test", False))
+    existing = st.session_state.get("test_pair")
+    if fixed and existing is not None:
+        return True
+
+    verifier = _trial_verifier()
+    if verifier is None:
+        return False
+
+    exclude: List[Grid] = []
+    hot = st.session_state.get("hot_start_pair")
+    if hot is not None:
+        exclude.append(hot.input)
+    for prev in st.session_state.get("shown_test_inputs") or []:
+        exclude.append(prev)
+
+    pair = sample_consistent_dynamic_pair(
+        st.session_state.task,
+        verifier,
+        st.session_state.rng,
+        exclude_inputs=exclude or None,
+    )
+    if pair is None:
+        return False
+    st.session_state.test_pair = pair
+    shown = list(st.session_state.get("shown_test_inputs") or [])
+    shown.append(clone_grid(pair.input))
+    st.session_state.shown_test_inputs = shown
+    return True
+
+
 def _run_verifier_chain(inp: Grid) -> Tuple[Grid, VerifierSlot]:
     """Return (output_grid, slot_used). Raises RuntimeError if every verifier fails."""
     errors: List[str] = []
@@ -291,6 +342,8 @@ def _init_trial(
     st.session_state.valid_verifiers = session.valid_verifiers
     st.session_state.hot_start_pair = session.hot_start_pair
     st.session_state.test_pair = session.test_pair
+    st.session_state.fixed_test = session.fixed_test
+    st.session_state.shown_test_inputs = []
     n_valid = len(session.valid_verifiers)
     st.session_state.phase = "explore"
     st.session_state.query_count = 0
@@ -547,8 +600,16 @@ def _explore_phase() -> None:
 
     with b2:
         if st.button("Finish exploration — receive test input", use_container_width=True):
-            st.session_state.phase = "test"
-            if st.session_state.test_pair is not None:
+            if not _ensure_test_pair():
+                n_prior = len(st.session_state.get("shown_test_inputs") or [])
+                if st.session_state.get("hot_start_pair") is not None:
+                    n_prior += 1
+                st.error(
+                    "Could not sample a new dynamic test pair "
+                    f"(distinct from {n_prior} prior example(s)). "
+                    "Query again or start a new trial."
+                )
+            else:
                 ti = clone_grid(st.session_state.test_pair.input)
                 st.session_state.test_h = len(ti)
                 st.session_state.test_w = len(ti[0]) if ti else 1
@@ -557,8 +618,9 @@ def _explore_phase() -> None:
                     st.session_state.test_h,
                     st.session_state.test_w,
                 )
-            _bump_test_editor()
-            st.rerun()
+                st.session_state.phase = "test"
+                _bump_test_editor()
+                st.rerun()
 
 
 def _test_phase() -> None:
@@ -567,7 +629,10 @@ def _test_phase() -> None:
     st.metric("Query count (score)", st.session_state.query_count)
     tp = st.session_state.test_pair
     if tp is None:
-        st.error("No ARC-GEN dynamic test pair available.")
+        st.error(
+            "Could not sample a dynamic test pair for this task. "
+            "Start a new trial, or finish exploration again after another query."
+        )
         st.stop()
 
     if st.session_state.re_trials:
@@ -701,12 +766,13 @@ def main() -> None:
         unsafe_allow_html=True,
     )
     _dataset_names = {
-        "arc": "ARC-AGI",
+        "arc": "ARC-AGI-1",
+        "arc2": "ARC-AGI-2",
         "conceptarc": "ConceptARC",
         "parc": "P-ARC",
     }
     _dataset_label = _dataset_names.get(
-        st.session_state.get("dataset", "arc"), "ARC-AGI"
+        st.session_state.get("dataset", "arc"), "ARC-AGI-1"
     )
     st.caption(
         f"Dataset: **{_dataset_label}** · "
@@ -728,9 +794,10 @@ def main() -> None:
     with st.sidebar:
         st.markdown("### Session")
 
-        _dataset_options = ["arc", "conceptarc", "parc"]
+        _dataset_options = ["arc", "arc2", "conceptarc", "parc"]
         _dataset_labels = {
-            "arc": "ARC-AGI (original)",
+            "arc": "ARC-AGI-1",
+            "arc2": "ARC-AGI-2",
             "conceptarc": "ConceptARC",
             "parc": "P-ARC",
         }
@@ -743,7 +810,7 @@ def main() -> None:
             index=_dataset_options.index(_current_dataset),
             format_func=lambda d: _dataset_labels[d],
             key="dataset_radio",
-            help="ARC-AGI original, ConceptARC DSL programs, or P-ARC (t1–t50).",
+            help="ARC-AGI-1 training (400), validated ARC-AGI-2 (200), ConceptARC, or P-ARC (t1–t50).",
         )
         if _chosen_dataset != _current_dataset:
             for k in list(st.session_state.keys()):
@@ -755,6 +822,40 @@ def main() -> None:
                 clear_task_id=_chosen_dataset != args.dataset,
             )
             st.rerun()
+
+        if st.session_state.get("dataset") == "arc2":
+            _agi2_ids = list(list_agi2_valid_task_ids())
+            if _agi2_ids:
+                _current_agi2 = st.session_state.get("task_id")
+                _agi2_idx = (
+                    _agi2_ids.index(_current_agi2)
+                    if _current_agi2 in _agi2_ids
+                    else 0
+                )
+                _chosen_agi2 = st.selectbox(
+                    "ARC-AGI-2 task",
+                    _agi2_ids,
+                    index=_agi2_idx,
+                    key="arc2_task_select",
+                    help="Validated ARC-AGI-2 tasks (same 200-id pool as --dataset arc2).",
+                )
+                _agi2_ready = st.session_state.get("_arc2_select_ready", False)
+                if _agi2_ready and _chosen_agi2 != _current_agi2:
+                    for k in list(st.session_state.keys()):
+                        del st.session_state[k]
+                    _init_trial(
+                        args,
+                        seed_override=random.randint(1, 2**31 - 1),
+                        dataset_override="arc2",
+                        task_id_override=_chosen_agi2,
+                    )
+                    st.rerun()
+                st.session_state._arc2_select_ready = True
+            else:
+                st.warning(
+                    "No validated ARC-AGI-2 verifiers found under "
+                    "external/agi2_verifiers/valid."
+                )
 
         if st.session_state.get("dataset") == "conceptarc":
             _task_ids = list(list_conceptarc_task_ids())
@@ -874,7 +975,8 @@ def main() -> None:
             )
             st.rerun()
         st.markdown(
-            "Use the **Dataset** selector above to switch between ARC-AGI and ConceptARC. "
+            "Use the **Dataset** selector above to switch between ARC-AGI-1, ARC-AGI-2, "
+            "ConceptARC, and P-ARC. "
             "Restart the app to change feature flags (`--hot-start`/`--no-hot-start`, `--noisy-science`, "
             "`--re-trials`), `--noise-probability`, `--task-id`, `--dataset`, or `--seed`."
         )

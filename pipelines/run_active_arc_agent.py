@@ -32,12 +32,12 @@ from framework.prompting.active_arc_tools import DEFAULT_OPENAI_MODEL
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="ActiveARC OpenAI agent (tool calling)")
-    p.add_argument("--task-id", type=str, default=None, help="Task id (ARC: 8eb1be9a; ConceptARC: count/count11 or sample; P-ARC: test2_t1); omit for random eligible task.")
+    p.add_argument("--task-id", type=str, default=None, help="Task id (ARC-AGI-1/2: 8eb1be9a; ConceptARC: count/count11 or sample; P-ARC: test2_t1); omit for random eligible task.")
     p.add_argument(
         "--dataset",
-        choices=["arc", "conceptarc", "parc"],
+        choices=["arc", "arc2", "conceptarc", "parc"],
         default="arc",
-        help="Task pool: arc (default), conceptarc, or parc (P-ARC).",
+        help="Task pool: arc (ARC-AGI-1, default), arc2 (validated ARC-AGI-2), conceptarc, or parc.",
     )
     p.add_argument(
         "--sample-family",
