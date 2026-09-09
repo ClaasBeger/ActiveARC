@@ -11,6 +11,7 @@ from framework.active_arc.query_noise import maybe_corrupt_query_output
 from framework.active_arc.verifier_selection import (
     iter_eligible_tasks,
     list_valid_verifiers,
+    pick_verifier,
     sample_consistent_dynamic_pair,
 )
 from framework.dimensions.classification_distribution import VerifierSlot
@@ -32,30 +33,17 @@ def normalize_query_grid(grid: Grid) -> Grid:
     ]
 
 
-def _ordered_verifier_chain(
-    primary: VerifierSlot,
-    valid: List[Tuple[VerifierSlot, Verifier]],
-) -> List[Tuple[VerifierSlot, Verifier]]:
-    first = [(s, f) for s, f in valid if s == primary]
-    rest = [(s, f) for s, f in valid if s != primary]
-    return first + rest
+def _run_trial_verifier(inp: Grid, verifier: Verifier) -> Grid:
+    """Run the trial's pinned verifier. Raises ``RuntimeError`` if it fails.
 
-
-def _run_verifier_chain(
-    inp: Grid,
-    primary: VerifierSlot,
-    valid: List[Tuple[VerifierSlot, Verifier]],
-) -> Tuple[Grid, VerifierSlot]:
-    errors: List[str] = []
-    for slot, vfn in _ordered_verifier_chain(primary, valid):
-        try:
-            out = vfn(copy.deepcopy(inp))
-            return clone_grid(out), slot
-        except Exception as e:
-            errors.append(f"{slot}: {type(e).__name__}: {e}")
-    raise RuntimeError(
-        "Every verifier failed on this input:\n" + "\n".join(errors)
-    )
+    Only this one verifier ever answers, so every query, hot-start pair, test
+    sample and answer check in a trial comes from the same rule; falling back to
+    another valid slot would silently mix rules within a session.
+    """
+    try:
+        return clone_grid(verifier(copy.deepcopy(inp)))
+    except Exception as e:
+        raise RuntimeError(f"Trial verifier failed: {type(e).__name__}: {e}") from e
 
 
 @dataclass
@@ -70,6 +58,9 @@ class ActiveArcTrialSession:
     valid_verifiers: List[Tuple[VerifierSlot, Verifier]]
     hot_start_pair: Optional[GridPair]
     test_pair: Optional[GridPair]
+    # The one callable chosen for this trial. Pinned because a slot name is not a
+    # unique key (ARC-AGI-2 exposes several verifiers under "custom").
+    verifier: Optional[Verifier] = None
     dataset: str = "arc"
     phase: Phase = "explore"
     query_count: int = 0
@@ -77,6 +68,7 @@ class ActiveArcTrialSession:
     noise_probability: float = 0.0
     noisy_science: bool = False
     re_trials: bool = False
+    wrong_answer_penalty: int = 0
     hot_start: bool = False
     fixed_test: bool = False
     test_round: int = 0
@@ -91,6 +83,8 @@ class ActiveArcTrialSession:
         return None
 
     def _verifier_fn(self) -> Verifier:
+        if self.verifier is not None:
+            return self.verifier
         for slot, fn in self.valid_verifiers:
             if slot == self.verifier_slot:
                 return fn
@@ -122,6 +116,17 @@ class ActiveArcTrialSession:
             )
         return out
 
+    def announced_wrong_answer_penalty(self) -> int:
+        """Query-count penalty announced in the prompt and applied on a wrong test.
+
+        Explicit ``wrong_answer_penalty`` wins. Re-trials with no override keep +10.
+        """
+        if self.wrong_answer_penalty > 0:
+            return int(self.wrong_answer_penalty)
+        if self.re_trials:
+            return 10
+        return 0
+
     def hot_start_json(self) -> Optional[Dict[str, List[List[int]]]]:
         if self.hot_start_pair is None:
             return None
@@ -145,9 +150,7 @@ class ActiveArcTrialSession:
             return {"ok": False, "error": INVALID_INPUT_OR_RULE_MESSAGE}
 
         try:
-            gold, used_slot = _run_verifier_chain(
-                inp, self.verifier_slot, self.valid_verifiers
-            )
+            gold = _run_trial_verifier(inp, self._verifier_fn())
         except RuntimeError:
             return {"ok": False, "error": INVALID_INPUT_OR_RULE_MESSAGE}
 
@@ -158,7 +161,7 @@ class ActiveArcTrialSession:
                 shown, corrupted, kind = maybe_corrupt_query_output(
                     self.task_id,
                     self.task,
-                    used_slot,
+                    self.verifier_slot,
                     inp,
                     gold,
                     self.rng,
@@ -193,11 +196,11 @@ class ActiveArcTrialSession:
         return out
 
     def finish_exploration(self) -> Dict[str, Any]:
-        """Switch to test phase; return the test input grid."""
+        """Switch to test phase; return the test input grid (``request_test`` tool)."""
         if self.phase != "explore":
             return {
                 "ok": False,
-                "error": f"finish_exploration only from explore (now: {self.phase}).",
+                "error": f"request_test only from explore (now: {self.phase}).",
             }
         if not self.fixed_test or self.test_pair is None:
             exclude_count = len(self.shown_test_inputs) + (
@@ -241,7 +244,7 @@ class ActiveArcTrialSession:
                 "error": f"submit_final_answer only in test phase (now: {self.phase}).",
             }
         if self.test_pair is None:
-            return {"ok": False, "error": "No test sample; call finish_exploration first."}
+            return {"ok": False, "error": "No test sample; call request_test first."}
         ti = clone_grid(self.test_pair.input)
         try:
             pred = normalize_query_grid(clone_grid(grid))
@@ -250,23 +253,23 @@ class ActiveArcTrialSession:
             return {"ok": False, "error": INVALID_INPUT_OR_RULE_MESSAGE}
 
         try:
-            gold, _slot = _run_verifier_chain(
-                ti, self.verifier_slot, self.valid_verifiers
-            )
+            gold = _run_trial_verifier(ti, self._verifier_fn())
         except RuntimeError:
             return {"ok": False, "error": INVALID_INPUT_OR_RULE_MESSAGE}
 
         ok = is_equal_grid(pred, gold)
+        penalty = self.announced_wrong_answer_penalty()
+        if not ok and penalty > 0:
+            self.query_count += penalty
         if self.re_trials and not ok:
-            self.query_count += 10
             self.phase = "explore"
             self.test_correct = None
             retry_msg = (
-                "Wrong answer: +10 query penalty. You are back in explore; query again, "
-                "then finish_exploration to retry the same test."
+                f"Wrong answer: +{penalty} query penalty. You are back in explore; query again, "
+                "then request_test to retry the same test."
                 if self.fixed_test
-                else "Wrong answer: +10 query penalty. You are back in explore; query again, "
-                "then finish_exploration for a new test sample."
+                else f"Wrong answer: +{penalty} query penalty. You are back in explore; query again, "
+                "then request_test for a new test sample."
             )
             return {
                 "ok": True,
@@ -274,18 +277,23 @@ class ActiveArcTrialSession:
                 "query_count": self.query_count,
                 "phase": self.phase,
                 "penalty_applied": True,
+                "penalty": penalty,
                 "message": retry_msg,
             }
 
         self.test_correct = ok
         self.phase = "done"
-        return {
+        out: Dict[str, Any] = {
             "ok": True,
             "correct": ok,
             "query_count": self.query_count,
             "phase": self.phase,
             "done": True,
         }
+        if not ok and penalty > 0:
+            out["penalty_applied"] = True
+            out["penalty"] = penalty
+        return out
 
 
 def _create_arc2_trial_inputs(
@@ -323,10 +331,11 @@ def _create_arc2_trial_inputs(
             Optional[GridPair],
         ]
     ]:
-        valid = list_valid_verifiers(t)
-        if not valid:
+        picked = pick_verifier(t, rng)
+        if picked is None:
             return None
-        sl, ver = rng.choice(valid)
+        valid = list_valid_verifiers(t)
+        sl, ver = picked
         try:
             hot = _sample_hot_start_pair(t, ver, rng, hot_start=hot_start)
             if fixed_test:
@@ -668,7 +677,8 @@ def create_trial_session(
     task_id: Optional[str] = None,
     hot_start: bool = True,
     noisy_science: bool = False,
-    re_trials: bool = True,
+    re_trials: bool = False,
+    wrong_answer_penalty: int = 0,
     fixed_test: bool = False,
     noise_probability: float = 0.12,
     dataset: str = "arc",
@@ -719,10 +729,11 @@ def create_trial_session(
         )
     elif task_id is not None:
         task = load_task(task_id, load_alternative_verifiers=False)
-        valid = list_valid_verifiers(task)
-        if not valid:
+        picked = pick_verifier(task, rng)
+        if picked is None:
             raise ValueError(f"No valid verifier for task {task_id!r}")
-        slot, verifier = rng.choice(valid)
+        valid = list_valid_verifiers(task)
+        slot, verifier = picked
         hot = _sample_hot_start_pair(task, verifier, rng, hot_start=hot_start)
         if fixed_test:
             exclude = [hot.input] if hot is not None else []
@@ -739,10 +750,11 @@ def create_trial_session(
         valid_list = valid
     else:
         for t_id, t in iter_eligible_tasks(rng):
-            valid = list_valid_verifiers(t)
-            if not valid:
+            picked = pick_verifier(t, rng)
+            if picked is None:
                 continue
-            sl, ver = rng.choice(valid)
+            valid = list_valid_verifiers(t)
+            sl, ver = picked
             try:
                 hot = _sample_hot_start_pair(t, ver, rng, hot_start=hot_start)
                 if fixed_test:
@@ -787,6 +799,7 @@ def create_trial_session(
         rng=rng,
         verifier_slot=slot,
         valid_verifiers=valid_list,
+        verifier=verifier,
         hot_start_pair=hot,
         test_pair=test_pair,
         dataset=dataset,
@@ -796,6 +809,7 @@ def create_trial_session(
         noise_probability=noise_p,
         noisy_science=noisy_science,
         re_trials=re_trials,
+        wrong_answer_penalty=max(0, int(wrong_answer_penalty)),
         hot_start=hot_start,
         fixed_test=fixed_test,
         test_correct=None,

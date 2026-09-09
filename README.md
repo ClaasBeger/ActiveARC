@@ -19,8 +19,8 @@ streamlit run interface/active_arc_app.py -- --no-hot-start
 streamlit run interface/active_arc_app.py -- --noisy-science
 streamlit run interface/active_arc_app.py -- --noisy-science --noise-probability 0.15
 
-# Wrong test answer sends you back to exploration (+10 query count); on by default:
-streamlit run interface/active_arc_app.py -- --no-re-trials
+# Wrong test answer sends you back to exploration (+10 query count); off by default:
+streamlit run interface/active_arc_app.py -- --re-trials
 
 # Fixed RNG for task/verifier selection
 streamlit run interface/active_arc_app.py -- --seed 42
@@ -43,6 +43,25 @@ cd interface/arc_grid_component/frontend && npm install && npm run build
 ## Experimentation
 
 ARC task **`8eb1be9a`** is a good example to try when experimenting with the interface and modes.
+
+## Verifier selection
+
+ARC-AGI-1 tasks can have several validated verifiers (`re_arc`, the golf slots
+`google` / `keymoon` / `neurips`, and `custom`; see `task_valid_verifiers.csv`).
+Two rules keep a trial honest:
+
+- **`re_arc` wins.** When it is among a task's valid verifiers it is always the
+  one chosen; otherwise a remaining slot is sampled uniformly. Golf verifiers
+  frequently hardcode ARC-GEN grid shapes and answer off-distribution queries
+  with well-formed garbage instead of raising.
+- **One verifier per task per session.** The chosen callable is pinned (in
+  `framework/active_arc/verifier_selection.py`) and answers every query,
+  hot-start pair, test sample and final answer for that task — including later
+  trials on the same task in the same process. There is no fallback to another
+  slot: if the pinned verifier raises, the query is rejected with
+  *Invalid Input Grid or Rule not Applicable* and is not counted.
+
+`clear_verifier_caches()` (or `clear_verifier_pins()`) drops the pins in tests.
 
 ## External ARC editor (`external/arc-app`)
 
@@ -169,7 +188,7 @@ Results land in `experiments/slippage/slippage_pairs.json`. Each row includes
 
 Headless trials use the same explore → test flow as the Streamlit UI. The
 recommended backend is the **Responses API** with custom function tools
-(``submit_query``, ``finish_exploration``, ``submit_final_answer``). Each model
+(``submit_query``, ``request_test``, ``submit_final_answer``). Each model
 turn may call tools; tool outputs are fed back via ``previous_response_id`` so
 reasoning context stays server-side. Stable rules are sent once in a turn-1
 ``developer`` input message (persisted in the chain); later turns only append

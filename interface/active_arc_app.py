@@ -49,8 +49,8 @@ def _parse_cli() -> argparse.Namespace:
     p.add_argument(
         "--re-trials",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Wrong final test answer returns to exploration and adds +10 to query count. On by default; use --no-re-trials to disable.",
+        default=False,
+        help="Wrong final test answer returns to exploration and adds +10 to query count. Off by default; use --re-trials to enable.",
     )
     p.add_argument(
         "--mode",
@@ -62,7 +62,7 @@ def _parse_cli() -> argparse.Namespace:
         "--fixed-test",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Keep one test sample for the whole trial (default: resample on each finish_exploration).",
+        help="Keep one test sample for the whole trial (default: resample on each request_test).",
     )
     p.add_argument(
         "--noise-probability",
@@ -193,21 +193,18 @@ def _session_valid_verifiers() -> List[Tuple[VerifierSlot, Verifier]]:
     return fresh
 
 
-def _ordered_verifier_chain() -> List[Tuple[VerifierSlot, Verifier]]:
-    """Primary (trial) verifier first, then other valid verifiers as fallbacks."""
-    primary: VerifierSlot = st.session_state.verifier_slot
-    valid = _session_valid_verifiers()
-    first = [(s, f) for s, f in valid if s == primary]
-    rest = [(s, f) for s, f in valid if s != primary]
-    return first + rest
-
-
 def _trial_verifier() -> Optional[Verifier]:
+    """The one verifier pinned for this task in this session."""
     verifier = st.session_state.get("verifier")
     if verifier is not None:
         return verifier
-    chain = _session_valid_verifiers()
-    return chain[0][1] if chain else None
+    primary: VerifierSlot = st.session_state.get("verifier_slot")
+    valid = _session_valid_verifiers()
+    for slot, fn in valid:
+        if slot == primary:
+            st.session_state.verifier = fn
+            return fn
+    return valid[0][1] if valid else None
 
 
 def _ensure_test_pair() -> bool:
@@ -215,7 +212,7 @@ def _ensure_test_pair() -> bool:
 
     Streamlit trials default to ``fixed_test=False``, so ``create_trial_session``
     leaves ``test_pair`` as ``None`` and the pair is drawn when exploration ends
-    (same as ``ActiveArcTrialSession.finish_exploration``).
+    (same as ``ActiveArcTrialSession.finish_exploration`` / ``request_test``).
     """
     fixed = bool(st.session_state.get("fixed_test", False))
     existing = st.session_state.get("test_pair")
@@ -248,18 +245,20 @@ def _ensure_test_pair() -> bool:
     return True
 
 
-def _run_verifier_chain(inp: Grid) -> Tuple[Grid, VerifierSlot]:
-    """Return (output_grid, slot_used). Raises RuntimeError if every verifier fails."""
-    errors: List[str] = []
-    for slot, vfn in _ordered_verifier_chain():
-        try:
-            out = vfn(copy.deepcopy(inp))
-            return clone_grid(out), slot
-        except Exception as e:
-            errors.append(f"{slot}: {type(e).__name__}: {e}")
-    raise RuntimeError(
-        "Every verifier failed on this input:\n" + "\n".join(errors)
-    )
+def _run_trial_verifier(inp: Grid) -> Tuple[Grid, VerifierSlot]:
+    """Run the pinned trial verifier. Raises RuntimeError if it fails.
+
+    Never falls back to another valid slot: every query, test sample and answer
+    check for this task must come from the same rule for the whole session.
+    """
+    vfn = _trial_verifier()
+    slot: VerifierSlot = st.session_state.get("verifier_slot")
+    if vfn is None:
+        raise RuntimeError("No verifier available for this trial.")
+    try:
+        return clone_grid(vfn(copy.deepcopy(inp))), slot
+    except Exception as e:
+        raise RuntimeError(f"Trial verifier failed: {type(e).__name__}: {e}") from e
 
 
 def _df_from_grid(g: Grid) -> pd.DataFrame:
@@ -322,11 +321,7 @@ def _init_trial(
         st.error(str(e))
         st.stop()
 
-    verifier: Optional[Verifier] = None
-    for slot, vfn in session.valid_verifiers:
-        if slot == session.verifier_slot:
-            verifier = vfn
-            break
+    verifier: Optional[Verifier] = session.verifier
 
     st.session_state.dataset = session.dataset
     st.session_state.trial_seed = session.seed
@@ -413,7 +408,7 @@ def _explore_phase() -> None:
     if st.session_state.get("re_trials_penalty_notice"):
         st.warning(
             "Incorrect test answer: **+10** added to your query count. "
-            "You can query again, then use **Finish exploration** to retry the same test."
+            "You can query again, then use **Request test** to retry the same test."
         )
         st.session_state.re_trials_penalty_notice = False
 
@@ -557,7 +552,7 @@ def _explore_phase() -> None:
                 return
 
             try:
-                gold, used_slot = _run_verifier_chain(inp)
+                gold, used_slot = _run_trial_verifier(inp)
             except RuntimeError:
                 st.error("Invalid Input Grid or Rule not Applicable")
                 st.caption(
@@ -599,7 +594,7 @@ def _explore_phase() -> None:
             st.rerun()
 
     with b2:
-        if st.button("Finish exploration — receive test input", use_container_width=True):
+        if st.button("Request test — receive test input", use_container_width=True):
             if not _ensure_test_pair():
                 n_prior = len(st.session_state.get("shown_test_inputs") or [])
                 if st.session_state.get("hot_start_pair") is not None:
@@ -631,7 +626,7 @@ def _test_phase() -> None:
     if tp is None:
         st.error(
             "Could not sample a dynamic test pair for this task. "
-            "Start a new trial, or finish exploration again after another query."
+            "Start a new trial, or request a test again after another query."
         )
         st.stop()
 
@@ -702,7 +697,7 @@ def _test_phase() -> None:
             st.error("Invalid Input Grid or Rule not Applicable")
             return
         try:
-            gold, _slot = _run_verifier_chain(ti)
+            gold, _slot = _run_trial_verifier(ti)
         except RuntimeError:
             st.error("Invalid Input Grid or Rule not Applicable")
             return

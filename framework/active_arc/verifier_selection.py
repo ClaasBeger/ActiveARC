@@ -18,10 +18,22 @@ from framework.verifier_selection import (
 
 _VALID_VERIFIERS_CACHE: Dict[str, List[Tuple[VerifierSlot, Verifier]]] = {}
 
+# Slot preferred whenever it is among a task's valid verifiers. Only ARC-AGI-1
+# tasks expose an ``re_arc`` slot; the golf slots (google/keymoon/neurips) often
+# hardcode ARC-GEN grid shapes and answer off-distribution queries with garbage
+# instead of raising, so re_arc is the safer rule to probe against.
+PREFERRED_SLOT: VerifierSlot = "re_arc"
+
+# task_id -> index into ``list_valid_verifiers(task)``, fixed on first pick so a
+# task keeps one verifier for every operation in this process (queries, hot
+# start, test sampling, answer checking) and across trials in the same session.
+_SESSION_VERIFIER_PIN: Dict[str, int] = {}
+
 
 def clear_verifier_caches() -> None:
-    """Drop cached verifier lists and CSV cache (for tests)."""
+    """Drop cached verifier lists, session pins and CSV cache (for tests)."""
     _VALID_VERIFIERS_CACHE.clear()
+    _SESSION_VERIFIER_PIN.clear()
     clear_verifier_csv_cache()
 
 
@@ -63,14 +75,56 @@ def list_valid_verifiers(task: ArcTask) -> List[Tuple[VerifierSlot, Verifier]]:
     return out
 
 
-def pick_random_verifier(
+def pinned_verifier(task: ArcTask) -> Optional[Tuple[VerifierSlot, Verifier]]:
+    """Verifier already pinned for *task* in this session, or ``None``."""
+    idx = _SESSION_VERIFIER_PIN.get(task.task_id)
+    if idx is None:
+        return None
+    valid = list_valid_verifiers(task)
+    if idx >= len(valid):
+        return None
+    return valid[idx]
+
+
+def pin_verifier(task_id: str, index: int) -> None:
+    """Fix the verifier a task uses for the rest of this session."""
+    _SESSION_VERIFIER_PIN[task_id] = int(index)
+
+
+def clear_verifier_pins() -> None:
+    """Forget session verifier pins (keeps the valid-verifier cache)."""
+    _SESSION_VERIFIER_PIN.clear()
+
+
+def pick_verifier(
     task: ArcTask, rng: random.Random
 ) -> Optional[Tuple[VerifierSlot, Verifier]]:
-    """Uniformly sample among all valid verifiers, or ``None`` if none qualify."""
+    """Choose one verifier for *task* and pin it for the rest of the session.
+
+    Order: a pin from an earlier trial in this session, then ``re_arc`` when it is
+    valid (ARC-AGI-1 only), then a uniform sample among the remaining slots.
+    Returns ``None`` if the task has no valid verifier.
+    """
     valid = list_valid_verifiers(task)
     if not valid:
         return None
-    return rng.choice(valid)
+
+    pinned = pinned_verifier(task)
+    if pinned is not None:
+        return pinned
+
+    index = next(
+        (i for i, (slot, _) in enumerate(valid) if slot == PREFERRED_SLOT),
+        None,
+    )
+    if index is None:
+        index = rng.randrange(len(valid))
+    pin_verifier(task.task_id, index)
+    return valid[index]
+
+
+# Back-compat alias: selection is no longer uniform when ``re_arc`` is available.
+pick_random_verifier = pick_verifier
 
 
 def _list_original_task_ids() -> List[str]:
