@@ -94,6 +94,13 @@ def _parse_args() -> argparse.Namespace:
         "stable+dynamic) instead of a single output grid.",
     )
     p.add_argument(
+        "--defer-program-eval",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="With --program-test: record the submitted program without scoring it "
+        "(score later with `python -m pipelines.score_programs <run-dir>`).",
+    )
+    p.add_argument(
         "--skip-existing",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -167,6 +174,7 @@ def _run_one(args: argparse.Namespace, task_id: str) -> dict:
         dataset=args.dataset,
         fixed_test=args.fixed_test,
         program_test=args.program_test,
+        defer_program_eval=args.defer_program_eval,
     )
     reasoning_effort = None if args.reasoning_effort.lower() == "none" else args.reasoning_effort
     if args.backend == "responses":
@@ -221,6 +229,7 @@ def main() -> None:
             "fixed_test": args.fixed_test,
             "wrong_answer_penalty": args.wrong_answer_penalty,
             "program_test": args.program_test,
+            "defer_program_eval": args.defer_program_eval,
         },
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")

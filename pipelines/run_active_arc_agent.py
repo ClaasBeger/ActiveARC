@@ -96,6 +96,13 @@ def _parse_args() -> argparse.Namespace:
         "stable+dynamic) instead of a single output grid.",
     )
     p.add_argument(
+        "--defer-program-eval",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="With --program-test: record the submitted program without scoring it "
+        "(score later with `python -m pipelines.score_programs <run-dir>`).",
+    )
+    p.add_argument(
         "--dump-transcript",
         type=str,
         default=None,
@@ -119,6 +126,7 @@ def main() -> None:
         persist_sampled_family=args.persist_sampled_family,
         fixed_test=args.fixed_test,
         program_test=args.program_test,
+        defer_program_eval=args.defer_program_eval,
     )
     reasoning_effort = None if args.reasoning_effort.lower() == "none" else args.reasoning_effort
     if args.backend == "responses":

@@ -51,6 +51,7 @@ def build_trial_record(
                 {
                     "program_source": session.program_source,
                     "program_eval": session.program_eval,
+                    "program_eval_deferred": session.defer_program_eval,
                 }
                 if session.program_test
                 else {}

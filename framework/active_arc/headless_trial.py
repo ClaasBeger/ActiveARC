@@ -64,6 +64,8 @@ class ActiveArcTrialSession:
     # Program mode: the test stage asks for a Python rule implementation, scored on
     # train / test / generator-stable / generator-dynamic instead of one test grid.
     program_test: bool = False
+    # Record the program without scoring it; score later with pipelines.score_programs.
+    defer_program_eval: bool = False
     program_source: Optional[str] = None
     program_eval: Optional[Dict[str, Any]] = None
     dataset: str = "arc"
@@ -269,6 +271,22 @@ class ActiveArcTrialSession:
             }
         if not isinstance(code, str) or not code.strip():
             return {"ok": False, "error": "Missing or empty program source."}
+
+        if self.defer_program_eval:
+            # Store only. No correctness is computed, so nothing is revealed to the
+            # model and re-trials have nothing to retry on: the trial ends here.
+            self.program_source = code
+            self.program_eval = None
+            self.test_correct = None
+            self.phase = "done"
+            return {
+                "ok": True,
+                "recorded": True,
+                "query_count": self.query_count,
+                "phase": self.phase,
+                "done": True,
+                "message": "Program received. The trial is complete.",
+            }
 
         from framework.active_arc.program_eval import evaluate_program
 
@@ -775,6 +793,7 @@ def create_trial_session(
     fixed_test: bool = False,
     noise_probability: float = 0.12,
     program_test: bool = False,
+    defer_program_eval: bool = False,
     dataset: str = "arc",
     sample_family: bool = False,
     persist_sampled_family: bool = False,
@@ -907,5 +926,6 @@ def create_trial_session(
         hot_start=hot_start,
         fixed_test=fixed_test,
         program_test=program_test,
+        defer_program_eval=defer_program_eval,
         test_correct=None,
     )
