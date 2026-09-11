@@ -59,7 +59,7 @@ def run_openai_agent_loop(
         response = client.chat.completions.create(
             model=resolved_model,
             messages=messages,
-            tools=chat_tools_for_phase(session.phase),
+            tools=chat_tools_for_phase(session.phase, program_mode=session.program_test),
             tool_choice="auto",
             temperature=temperature,
         )
@@ -132,7 +132,7 @@ def run_openai_agent_loop(
                 }
                 return last_result
 
-            if name == "submit_final_answer" and out.get("ok") and out.get("done"):
+            if name in ("submit_final_answer", "submit_program") and out.get("ok") and out.get("done"):
                 last_result["final"] = {
                     "reason": "trial_complete",
                     "result": out,

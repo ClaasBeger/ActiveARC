@@ -61,6 +61,11 @@ class ActiveArcTrialSession:
     # The one callable chosen for this trial. Pinned because a slot name is not a
     # unique key (ARC-AGI-2 exposes several verifiers under "custom").
     verifier: Optional[Verifier] = None
+    # Program mode: the test stage asks for a Python rule implementation, scored on
+    # train / test / generator-stable / generator-dynamic instead of one test grid.
+    program_test: bool = False
+    program_source: Optional[str] = None
+    program_eval: Optional[Dict[str, Any]] = None
     dataset: str = "arc"
     phase: Phase = "explore"
     query_count: int = 0
@@ -202,6 +207,20 @@ class ActiveArcTrialSession:
                 "ok": False,
                 "error": f"request_test only from explore (now: {self.phase}).",
             }
+        if self.program_test:
+            self.phase = "test"
+            self.test_round += 1
+            return {
+                "ok": True,
+                "phase": self.phase,
+                "test_round": self.test_round,
+                "message": (
+                    "Testing stage. Submit a Python program implementing the rule with "
+                    "submit_program. It must define transform(grid) taking a grid "
+                    "(list of rows of ints 0-9) and returning the transformed grid. "
+                    "It is scored on held-out examples, not on a single test input."
+                ),
+            }
         if not self.fixed_test or self.test_pair is None:
             exclude_count = len(self.shown_test_inputs) + (
                 1 if self.hot_start_pair is not None else 0
@@ -236,8 +255,82 @@ class ActiveArcTrialSession:
             ),
         }
 
+    def submit_program(self, code: Any) -> Dict[str, Any]:
+        """Program mode: score a submitted rule implementation on the standard sets."""
+        if not self.program_test:
+            return {
+                "ok": False,
+                "error": "submit_program is only valid in program-test trials.",
+            }
+        if self.phase != "test":
+            return {
+                "ok": False,
+                "error": f"submit_program only in test phase (now: {self.phase}).",
+            }
+        if not isinstance(code, str) or not code.strip():
+            return {"ok": False, "error": "Missing or empty program source."}
+
+        from framework.active_arc.program_eval import evaluate_program
+
+        report = evaluate_program(self.task, code, rng=self.rng)
+        self.program_source = code
+        self.program_eval = report.to_dict()
+        # A program that does not compile or exposes no entry point is simply a
+        # wrong solution: scored, not retried.
+        ok = report.all_correct
+
+        penalty = self.announced_wrong_answer_penalty()
+        if not ok and penalty > 0:
+            self.query_count += penalty
+        set_scores = {
+            name: f"{s['n_correct']}/{s['n']}"
+            for name, s in (self.program_eval.get("sets") or {}).items()
+        }
+        load_error = None if report.loaded else report.error
+        if self.re_trials and not ok:
+            self.phase = "explore"
+            self.test_correct = None
+            retry: Dict[str, Any] = {
+                "ok": True,
+                "correct": False,
+                "set_scores": set_scores,
+                "query_count": self.query_count,
+                "phase": self.phase,
+                "penalty_applied": True,
+                "penalty": penalty,
+                "message": (
+                    f"Program did not reproduce every example (+{penalty} query penalty). "
+                    "You are back in explore; query again, then request_test to retry."
+                ),
+            }
+            if load_error:
+                retry["load_error"] = load_error
+            return retry
+
+        self.test_correct = ok
+        self.phase = "done"
+        out: Dict[str, Any] = {
+            "ok": True,
+            "correct": ok,
+            "set_scores": set_scores,
+            "query_count": self.query_count,
+            "phase": self.phase,
+            "done": True,
+        }
+        if not ok and penalty > 0:
+            out["penalty_applied"] = True
+            out["penalty"] = penalty
+        if load_error:
+            out["load_error"] = load_error
+        return out
+
     def submit_final_answer(self, grid: Grid) -> Dict[str, Any]:
         """Score against verifier on the test input."""
+        if self.program_test:
+            return {
+                "ok": False,
+                "error": "This trial expects a program: use submit_program.",
+            }
         if self.phase != "test":
             return {
                 "ok": False,
@@ -681,6 +774,7 @@ def create_trial_session(
     wrong_answer_penalty: int = 0,
     fixed_test: bool = False,
     noise_probability: float = 0.12,
+    program_test: bool = False,
     dataset: str = "arc",
     sample_family: bool = False,
     persist_sampled_family: bool = False,
@@ -812,5 +906,6 @@ def create_trial_session(
         wrong_answer_penalty=max(0, int(wrong_answer_penalty)),
         hot_start=hot_start,
         fixed_test=fixed_test,
+        program_test=program_test,
         test_correct=None,
     )

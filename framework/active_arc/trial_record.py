@@ -43,9 +43,18 @@ def build_trial_record(
             "noisy_science": noisy_science,
             "re_trials": re_trials,
             "fixed_test": fixed_test,
+            "wrong_answer_penalty": session.announced_wrong_answer_penalty(),
         },
         "trial": {
             "verifier_slot": session.verifier_slot,
+            **(
+                {
+                    "program_source": session.program_source,
+                    "program_eval": session.program_eval,
+                }
+                if session.program_test
+                else {}
+            ),
             "hot_start_pair": session.hot_start_json(),
             "test_round": session.test_round,
             "test_input_query_count": session.test_input_query_count,

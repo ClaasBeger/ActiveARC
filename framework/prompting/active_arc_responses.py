@@ -99,7 +99,9 @@ def run_active_arc_responses_loop(
     for turn in range(max_turns):
         create_kwargs: Dict[str, Any] = {
             "model": resolved_model,
-            "tools": responses_tools_for_phase(session.phase),
+            "tools": responses_tools_for_phase(
+                session.phase, program_mode=session.program_test
+            ),
             "input": pending_input,
             "store": store,
         }
@@ -173,7 +175,7 @@ def run_active_arc_responses_loop(
                 }
                 return last_result
 
-            if name == "submit_final_answer" and out.get("ok") and out.get("done"):
+            if name in ("submit_final_answer", "submit_program") and out.get("ok") and out.get("done"):
                 last_result["usage"] = usage_totals(transcript)
                 last_result["final"] = {
                     "reason": "trial_complete",

@@ -23,7 +23,8 @@ _SUBMIT_QUERY_TOOL: Dict[str, Any] = {
     "type": "function",
     "name": "submit_query",
     "description": (
-        "Exploration stage only. Submit an input grid; the environment returns the transformed output grid. "
+        "Exploration stage only. Ask for another example: submit an input grid; "
+        "the environment returns the transformed output grid. "
         "Each successful call increases your query count by 1."
     ),
     "parameters": {
@@ -35,11 +36,11 @@ _SUBMIT_QUERY_TOOL: Dict[str, Any] = {
     "strict": True,
 }
 
-_FINISH_EXPLORATION_TOOL: Dict[str, Any] = {
+_REQUEST_TEST_TOOL: Dict[str, Any] = {
     "type": "function",
-    "name": "finish_exploration",
+    "name": "request_test",
     "description": (
-        "Exploration stage only. Enter the testing stage and receive a held-out test input grid."
+        "Exploration stage only. Request the final test and receive a held-out test input grid."
     ),
     "parameters": {
         "type": "object",
@@ -48,6 +49,9 @@ _FINISH_EXPLORATION_TOOL: Dict[str, Any] = {
     },
     "strict": True,
 }
+
+# Legacy tool name from earlier protocol; still dispatched.
+REQUEST_TEST_TOOL_NAMES = frozenset({"request_test", "finish_exploration"})
 
 _SUBMIT_FINAL_ANSWER_TOOL: Dict[str, Any] = {
     "type": "function",
@@ -65,14 +69,40 @@ _SUBMIT_FINAL_ANSWER_TOOL: Dict[str, Any] = {
     "strict": True,
 }
 
+_SUBMIT_PROGRAM_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "name": "submit_program",
+    "description": (
+        "Testing stage only (program trials). Submit a Python program implementing the "
+        "transformation rule. Define transform(grid) taking a grid (list of rows of "
+        "integers 0-9) and returning the transformed grid. Standard library only; no "
+        "input/output. It is run on held-out examples, so it must implement the general "
+        "rule rather than special-case the grids you have seen."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "code": {
+                "type": "string",
+                "description": "Python source defining transform(grid) -> grid.",
+            }
+        },
+        "required": ["code"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
 RESPONSES_EXPLORATION_TOOLS: List[Dict[str, Any]] = [
     _SUBMIT_QUERY_TOOL,
-    _FINISH_EXPLORATION_TOOL,
+    _REQUEST_TEST_TOOL,
 ]
 RESPONSES_TEST_TOOLS: List[Dict[str, Any]] = [_SUBMIT_FINAL_ANSWER_TOOL]
+RESPONSES_PROGRAM_TEST_TOOLS: List[Dict[str, Any]] = [_SUBMIT_PROGRAM_TOOL]
 RESPONSES_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     *RESPONSES_EXPLORATION_TOOLS,
     *RESPONSES_TEST_TOOLS,
+    *RESPONSES_PROGRAM_TEST_TOOLS,
 ]
 
 OPENAI_CHAT_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
@@ -111,42 +141,106 @@ OPENAI_CHAT_TEST_TOOLS: List[Dict[str, Any]] = [
     for tool in RESPONSES_TEST_TOOLS
 ]
 
+OPENAI_CHAT_PROGRAM_TEST_TOOLS: List[Dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": tool["name"],
+            "description": tool["description"],
+            "parameters": tool["parameters"],
+        },
+    }
+    for tool in RESPONSES_PROGRAM_TEST_TOOLS
+]
 
-def responses_tools_for_phase(phase: str) -> List[Dict[str, Any]]:
-    """Exploration exposes query + finish; testing exposes submit_final_answer only."""
+
+def responses_tools_for_phase(
+    phase: str, *, program_mode: bool = False
+) -> List[Dict[str, Any]]:
+    """Exploration exposes query + request_test; testing exposes the answer tool.
+
+    ``program_mode`` swaps ``submit_final_answer`` for ``submit_program``.
+    """
     if phase == "test":
-        return RESPONSES_TEST_TOOLS
+        return RESPONSES_PROGRAM_TEST_TOOLS if program_mode else RESPONSES_TEST_TOOLS
     return RESPONSES_EXPLORATION_TOOLS
 
 
-def chat_tools_for_phase(phase: str) -> List[Dict[str, Any]]:
+def chat_tools_for_phase(phase: str, *, program_mode: bool = False) -> List[Dict[str, Any]]:
     if phase == "test":
-        return OPENAI_CHAT_TEST_TOOLS
+        return OPENAI_CHAT_PROGRAM_TEST_TOOLS if program_mode else OPENAI_CHAT_TEST_TOOLS
     return OPENAI_CHAT_EXPLORATION_TOOLS
 
 
 def _system_prompt(session: ActiveArcTrialSession) -> str:
     lines = [
-        "You are solving a grid transformation task by actively querying the underlying "
-        "transformation rule by submitting input grids to the environment.",
+        "- In the following, you are given a single example consisting of an "
+        "input-output grid pair. There is an abstract rule that describes the "
+        "transformation from the input grid to the output grid. Your task is to "
+        "determine this abstract rule, over a series of steps.",
         "",
-        "Rules:",
-        "- In the following, you are given a single example pair consisting of an "
-        "input-output grid pair. Grids use integer values 0-9 to represent color.",
-        "- You can use the submit_query tool to submit an input grid. Once you have finished "
-        "exploration, you can use the finish_exploration tool to move to the testing stage.",
-        "- A wrong final test answer returns you to the exploration stage and adds +10 to "
-        "the query count.",
-        "- Your performance will be scored based on the amount of queries you need.",
+        (
+            "At each step, you may either (1) make a query: i.e., ask for another "
+            "example of an input-output grid pair that follows the same rule, or, "
+            "(2) if you are confident you know the rule, you may ask for a test, in "
+            "which you will submit a Python program implementing the rule."
+            if session.program_test
+            else "At each step, you may either (1) make a query: i.e., ask for another "
+            "example of an input-output grid pair that follows the same rule, or, "
+            "(2) if you are confident you know the rule, you may ask for a test, in "
+            "which you will be given a new input grid, and you will need to apply "
+            "the rule to generate the correct output grid."
+        ),
+        "",
+        "- You can use the submit_query tool to ask for an input grid. Once you "
+        "are confident you know the rule, you can use the request_test tool to "
+        "request the final test.",
     ]
-    if session.noisy_science:
-        lines.insert(
-            -1,
-            f"- Query outputs may be randomly corrupted (p≈{session.noise_probability:.2f}); "
-            "trust patterns across queries.",
+    if session.program_test:
+        lines.extend(
+            [
+                "- Submit the program with submit_program: define transform(grid) "
+                "taking a grid (list of rows of integers 0-9) and returning the "
+                "transformed grid. Standard library only.",
+                "- Your program is run on held-out examples of this same rule, so it "
+                "must implement the general transformation rather than special-case the "
+                "grids you have seen. It counts as correct only if it reproduces every "
+                "held-out example.",
+                "- Format:",
+                "",
+                "```python",
+                "def transform(grid):",
+                "    # grid is a list of rows, e.g. [[0, 1, 0], [5, 5, 0]]",
+                "    # return the transformed grid in the same format",
+                "    return [row[:] for row in grid]",
+                "```",
+                "",
+                "- Your performance will be scored based on the number of queries you "
+                "submit and whether your program is correct.",
+            ]
         )
-    if not session.re_trials:
-        lines = [ln for ln in lines if "+10" not in ln]
+    else:
+        lines.append(
+            "- Your performance will be scored based on the number of queries you "
+            "submit and whether you generate a correct output grid when you are given "
+            "a test."
+        )
+    penalty = session.announced_wrong_answer_penalty()
+    if penalty > 0:
+        if session.re_trials:
+            lines.append(
+                f"- A wrong test answer returns you to exploration and adds +{penalty} "
+                "to your query count."
+            )
+        else:
+            lines.append(
+                f"- A wrong test answer adds +{penalty} to your query count."
+            )
+    if session.noisy_science:
+        lines.append(
+            f"- Query outputs may be randomly corrupted (p≈{session.noise_probability:.2f}); "
+            "trust patterns across queries."
+        )
     return "\n".join(lines)
 
 
@@ -173,7 +267,7 @@ def build_task_user_message(session: ActiveArcTrialSession) -> str:
     training_pair = _primary_training_pair(session)
     payload = {"training_pair": training_pair}
     return (
-        "Here is your task (JSON). Test inputs are hidden until you call finish_exploration.\n\n"
+        "Here is your input-output grid pair (JSON).\n\n"
         f"```json\n{json.dumps(payload, indent=2)}\n```"
     )
 
@@ -216,7 +310,7 @@ def explore_phase_grid_dump_message(*, assistant_text: Optional[str] = None) -> 
         "Exploration stage: do not paste grids as plain text."
         f"{preview}\n\n"
         "Use submit_query with a JSON object "
-        '{"grid": [[...], ...]} to query the environment, or call finish_exploration '
+        '{"grid": [[...], ...]} to query the environment, or call request_test '
         "when you are ready for the held-out test input."
     )
 
@@ -230,20 +324,32 @@ def plain_text_protocol_reminder(
     if not looks_like_raw_grid(assistant_text):
         return None
     if session.phase == "test":
-        return test_phase_tool_required_message(assistant_text=assistant_text)
+        return test_phase_tool_required_message(
+            assistant_text=assistant_text, program_mode=session.program_test
+        )
     if session.phase == "explore":
         return explore_phase_grid_dump_message(assistant_text=assistant_text)
     return None
 
 
-def test_phase_tool_required_message(*, assistant_text: Optional[str] = None) -> str:
-    """User-turn reminder when the model pastes a grid in plain text during testing."""
+def test_phase_tool_required_message(
+    *, assistant_text: Optional[str] = None, program_mode: bool = False
+) -> str:
+    """User-turn reminder when the model answers in plain text during testing."""
     preview = ""
     if assistant_text and assistant_text.strip():
         trimmed = assistant_text.strip()
         if len(trimmed) > 80:
             trimmed = trimmed[:77] + "..."
         preview = f"\n\nYour message ({trimmed!r}) was not accepted as a final answer."
+    if program_mode:
+        return (
+            "Testing stage: do not paste code as plain text."
+            f"{preview}\n\n"
+            "Call submit_program with a JSON object "
+            '{"code": "def transform(grid): ..."} — Python source defining '
+            "transform(grid) -> grid."
+        )
     return (
         "Testing stage: do not paste grids as plain text."
         f"{preview}\n\n"
@@ -271,8 +377,11 @@ def execute_tool_call(
             return {"ok": False, "error": "Missing or invalid grid for submit_query."}
         return session.submit_query(grid)
 
-    if name == "finish_exploration":
+    if name in REQUEST_TEST_TOOL_NAMES:
         return session.finish_exploration()
+
+    if name == "submit_program":
+        return session.submit_program(args.get("code"))
 
     if name == "submit_final_answer":
         grid = args.get("grid")

@@ -72,14 +72,29 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--hot-start", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--noisy-science", action="store_true")
-    p.add_argument("--re-trials", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--re-trials", action=argparse.BooleanOptionalAction, default=False)
+    p.add_argument(
+        "--wrong-answer-penalty",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Announce and apply +N to query count on a wrong test answer "
+        "(0 = do not announce). Trial still ends unless --re-trials.",
+    )
     p.add_argument(
         "--fixed-test",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Keep one test sample for the whole trial (default: resample on each finish_exploration).",
+        help="Keep one test sample for the whole trial (default: resample on each request_test).",
     )
     p.add_argument("--noise-probability", type=float, default=0.12)
+    p.add_argument(
+        "--program-test",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Test stage asks for a Python program (scored on train/test/generator "
+        "stable+dynamic) instead of a single output grid.",
+    )
     p.add_argument(
         "--dump-transcript",
         type=str,
@@ -97,11 +112,13 @@ def main() -> None:
         hot_start=args.hot_start,
         noisy_science=args.noisy_science,
         re_trials=args.re_trials,
+        wrong_answer_penalty=args.wrong_answer_penalty,
         noise_probability=args.noise_probability,
         dataset=args.dataset,
         sample_family=args.sample_family,
         persist_sampled_family=args.persist_sampled_family,
         fixed_test=args.fixed_test,
+        program_test=args.program_test,
     )
     reasoning_effort = None if args.reasoning_effort.lower() == "none" else args.reasoning_effort
     if args.backend == "responses":
