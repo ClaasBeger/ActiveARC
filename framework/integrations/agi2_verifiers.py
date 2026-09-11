@@ -73,6 +73,11 @@ def clear_agi2_verifier_cache() -> None:
     _index.cache_clear()
 
 
+def list_agi2_valid_source_paths(task_id: str) -> List[Tuple[str, Path]]:
+    """Promoted verifier files for *task_id* (candidate_id, path)."""
+    return list(_index().get(task_id, []))
+
+
 def list_agi2_valid_task_ids() -> List[str]:
     """Task ids with ≥1 promoted valid AGI-2 verifier."""
     return sorted(_index())

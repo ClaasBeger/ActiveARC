@@ -25,6 +25,7 @@ a new DSL task family online (ConceptARC-GEN layer 3) for a chosen concept.
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import random
@@ -39,9 +40,30 @@ from framework.tasks.base import ArcTask
 
 _ACTIVEARC_ROOT = Path(__file__).resolve().parents[2]
 PROGRAMS_DIR = _ACTIVEARC_ROOT / "external" / "conceptarc" / "programs"
+RULES_CSV = PROGRAMS_DIR.parent / "ConceptARC_rules.csv"
 _SAMPLE_TRAIN = 3
 _SAMPLE_TEST = 3
 _SAMPLE_ATTEMPTS = 400
+
+# ActiveARC folder name -> ConceptARC-Rules CSV Task prefix (official 1–10).
+_RULE_CSV_TASK_PREFIX: Dict[str, str] = {
+    "abovebelow": "AboveBelow",
+    "center": "Center",
+    "cleanup": "CleanUp",
+    "completeshape": "CompleteShape",
+    "copy": "Copy",
+    "count": "Count",
+    "extendtoboundary": "ExtendToBoundary",
+    "extract": "ExtractObjects",
+    "fillednotfilled": "FilledNotFilled",
+    "horizontalvertical": "HorizontalVertical",
+    "insideoutside": "InsideOutside",
+    "movetoboundary": "MoveToBoundary",
+    "order": "Order",
+    "samedifferent": "SameDifferent",
+    "topbottom2d": "TopBottom2D",
+    "topbottom3d": "TopBottom3D",
+}
 
 # Concept name -> ConceptARC-GEN generator module attribute name.
 # Keep in sync with ConceptARC-GEN ``registry.concept_groups`` / ``export_to_activearc.CONCEPTS``.
@@ -211,6 +233,69 @@ def _load_gen_api() -> Optional["_ConceptArcGenApi"]:
                 sys.modules.pop("common", None)
 
     return _GEN_API
+
+
+def _rules_csv_path() -> Optional[Path]:
+    env = os.environ.get("CONCEPTARC_RULES_CSV")
+    if env:
+        path = Path(env).expanduser()
+        if path.is_file():
+            return path
+    if RULES_CSV.is_file():
+        return RULES_CSV
+    sibling = (
+        _ACTIVEARC_ROOT.parent.parent
+        / "ConceptARC-Rules"
+        / "Evaluation"
+        / "ConceptARC_rules.csv"
+    )
+    return sibling if sibling.is_file() else None
+
+
+@lru_cache(maxsize=1)
+def _ground_truth_rules() -> Dict[str, str]:
+    path = _rules_csv_path()
+    if path is None:
+        return {}
+    out: Dict[str, str] = {}
+    with path.open(newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            task = (row.get("Task") or "").strip()
+            rule = (row.get("Rule") or "").strip()
+            if task and rule:
+                out[task] = rule
+    return out
+
+
+def _trailing_int(name: str) -> Optional[int]:
+    i = len(name)
+    while i > 0 and name[i - 1].isdigit():
+        i -= 1
+    if i == len(name):
+        return None
+    return int(name[i:])
+
+
+def conceptarc_ground_truth_rule(task_id: str) -> Optional[str]:
+    """Human ground-truth rule for an official ConceptARC task (1–10 per concept).
+
+    Sourced from ``Evaluation/ConceptARC_rules.csv`` in
+    https://github.com/ClaasBeger/ConceptARC-Rules (pinned copy at
+    ``external/conceptarc/ConceptARC_rules.csv``). Generated families (11+)
+    have no row and return ``None``.
+    """
+    rules = _ground_truth_rules()
+    if not rules:
+        return None
+    tid = task_id.strip()
+    concept, name = tid.split("/", 1) if "/" in tid else (tid, tid)
+    number = _trailing_int(name)
+    if number is None:
+        return None
+    prefix = _RULE_CSV_TASK_PREFIX.get(concept.lower())
+    if prefix is None:
+        return None
+    return rules.get(f"{prefix}{number}")
 
 
 def conceptarc_available() -> bool:
