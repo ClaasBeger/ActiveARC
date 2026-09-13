@@ -674,6 +674,125 @@ def _make_arc_gen_generator(task_id: str) -> Optional[Callable[[int], List[GridP
     return gen
 
 
+def _int_grid(fn: Callable[[Grid], Grid]) -> Callable[[Grid], Grid]:
+    """Wrap a verifier so its cells come back as plain ints.
+
+    Several code-golf solutions build cells out of comparisons and hand back
+    Python ``bool`` (or numpy scalars). Those compare equal to 0/1, so the grid
+    looks right and passes validation, but it serialises as ``true``/``false``
+    and renders as "True" wherever it is shown. Normalise at the boundary.
+    """
+
+    def _wrapped(grid: Grid) -> Grid:
+        out = fn(grid)
+        if hasattr(out, "tolist"):
+            out = out.tolist()
+        if not isinstance(out, list):
+            return out
+        return [
+            [int(v) for v in row] if isinstance(row, (list, tuple)) else row
+            for row in out
+        ]
+
+    return _wrapped
+
+
+def _make_arc_gen_generator(task_id: str) -> Optional[Callable[[int], List[GridPair]]]:
+    """Return a callable that generates ARC-GEN synthetic pairs for a task."""
+    lookup = _arc_gen_id_to_task_num_and_generator(task_id)
+    if lookup is None:
+        return None
+    task_num, generator = lookup
+
+    # Adaptation for a64e4611:
+    # task255.py now includes the edge-fill post-process directly. The loader-side
+    # replacement is kept as a defensive fallback for environments that still carry an
+    # older task255 implementation.
+    if task_id == "a64e4611":
+        try:
+            import importlib.util
+            from pathlib import Path
+
+            edgefill_path = (
+                ROOT_DIR
+                / "external"
+                / "ARC-GEN"
+                / "tasks"
+                / "training"
+                / "task255_edgefill.py"
+            )
+            spec = importlib.util.spec_from_file_location(
+                "arcgen_task255_edgefill", edgefill_path
+            )
+            if spec is not None and spec.loader is not None:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                edge_gen = getattr(module, "generate", None)
+                if callable(edge_gen):
+                    generator = edge_gen  # type: ignore[assignment]
+        except Exception:
+            # Fall back to the original generator.
+            pass
+
+    def gen(num_examples: int, rng: Optional[random.Random] = None) -> List[GridPair]:
+        pairs: List[GridPair] = []
+        # ARC-GEN generators draw from the global ``random`` module. When ``rng`` is
+        # provided (trial seed), draws are reproducible across models; otherwise
+        # fall back to the module-level dynamic RNG.
+        source = rng if rng is not None else _DYNAMIC_GEN_RNG
+        state = random.getstate()
+        try:
+            if task_id == "a64e4611":
+                max_attempts = max(2000, num_examples * 120)
+                attempts = 0
+                while len(pairs) < num_examples and attempts < max_attempts:
+                    random.seed(source.randrange(2**63))
+                    example = generator()
+                    attempts += 1
+                    if not _arc_gen_a64e4611_example_is_unambiguous(example):
+                        continue
+                    pairs.append(GridPair(example["input"], example["output"]))
+                if len(pairs) < num_examples:
+                    raise RuntimeError(
+                        f"Custom ARC-GEN generator acceptance too low for {task_id!r}: "
+                        f"got {len(pairs)}/{num_examples} after {attempts} attempts"
+                    )
+                return pairs
+
+            for _ in range(num_examples):
+                random.seed(source.randrange(2**63))
+                example = generator()
+                pairs.append(GridPair(example["input"], example["output"]))
+            return pairs
+        finally:
+            random.setstate(state)
+
+    return gen
+
+
+def _int_grid(fn: Callable[[Grid], Grid]) -> Callable[[Grid], Grid]:
+    """Wrap a verifier so its cells come back as plain ints.
+
+    Several code-golf solutions build cells out of comparisons and hand back
+    Python ``bool`` (or numpy scalars). Those compare equal to 0/1, so the grid
+    looks right and passes validation, but it serialises as ``true``/``false``
+    and renders as "True" wherever it is shown. Normalise at the boundary.
+    """
+
+    def _wrapped(grid: Grid) -> Grid:
+        out = fn(grid)
+        if hasattr(out, "tolist"):
+            out = out.tolist()
+        if not isinstance(out, list):
+            return out
+        return [
+            [int(v) for v in row] if isinstance(row, (list, tuple)) else row
+            for row in out
+        ]
+
+    return _wrapped
+
+
 def _load_golf_verifier_from_neurips(task_id: str) -> Optional[Callable[[Grid], Grid]]:
     """Best-effort loader from `external/NeurIPS-Code-Golf-2025/solutions`."""
     solutions_root = ROOT_DIR / "external" / "NeurIPS-Code-Golf-2025" / "solutions"
@@ -701,14 +820,14 @@ def _load_golf_verifier_from_neurips(task_id: str) -> Optional[Callable[[Grid], 
 
     solve_fn = getattr(module, "solve", None)
     if callable(solve_fn):
-        return solve_fn  # type: ignore[return-value]
+        return _int_grid(solve_fn)  # type: ignore[return-value]
 
     for attr_name in dir(module):
         if attr_name.startswith("_"):
             continue
         attr = getattr(module, attr_name)
         if callable(attr):
-            return attr  # type: ignore[return-value]
+            return _int_grid(attr)  # type: ignore[return-value]
 
     return None
 
@@ -742,14 +861,14 @@ def _load_golf_verifier_from_google_code_golf_2025(
 
     solve_fn = getattr(module, "solve", None)
     if callable(solve_fn):
-        return solve_fn  # type: ignore[return-value]
+        return _int_grid(solve_fn)  # type: ignore[return-value]
 
     for attr_name in dir(module):
         if attr_name.startswith("_"):
             continue
         attr = getattr(module, attr_name)
         if callable(attr):
-            return attr  # type: ignore[return-value]
+            return _int_grid(attr)  # type: ignore[return-value]
 
     return None
 
@@ -811,14 +930,14 @@ def _load_golf_verifier_from_keymoon(task_id: str) -> Optional[Callable[[Grid], 
 
     solve_fn = getattr(module, "solve", None)
     if callable(solve_fn):
-        return solve_fn  # type: ignore[return-value]
+        return _int_grid(solve_fn)  # type: ignore[return-value]
 
     for attr_name in dir(module):
         if attr_name.startswith("_"):
             continue
         attr = getattr(module, attr_name)
         if callable(attr):
-            return attr  # type: ignore[return-value]
+            return _int_grid(attr)  # type: ignore[return-value]
 
     return None
 
@@ -926,14 +1045,32 @@ def load_task(task_id: str, *, load_alternative_verifiers: bool = True) -> ArcTa
             quinary_verifier,
         ) = _load_alternative_verifiers(task_id)
 
-    # ARC-AGI-2 / V2: no re-ARC; attach first offline-validated AGI-2 verifier.
-    if verifier is None:
+    # A verifier written in framework/custom_verifiers is a fix, not an
+    # alternative, so attach it whether or not alternatives were asked for.
+    if quinary_verifier is None:
         try:
-            from framework.integrations.agi2_verifiers import get_agi2_valid_verifier
+            from framework.custom_verifiers.registry import (
+                get_custom_verifier,
+                has_local_verifier,
+            )
 
-            verifier = get_agi2_valid_verifier(task_id)
+            if has_local_verifier(task_id):
+                quinary_verifier = get_custom_verifier(task_id)
         except Exception:
-            verifier = None
+            pass
+
+    # ARC-AGI-2 / V2: no re-ARC; prefer a local verifier, else the first
+    # offline-validated AGI-2 candidate.
+    if verifier is None:
+        if quinary_verifier is not None:
+            verifier = quinary_verifier
+        else:
+            try:
+                from framework.integrations.agi2_verifiers import get_agi2_valid_verifier
+
+                verifier = get_agi2_valid_verifier(task_id)
+            except Exception:
+                verifier = None
 
     task = ArcTask(
         task_id=task_id,

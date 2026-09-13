@@ -38,9 +38,10 @@ def generate(width=None, height=None, brow=None, bcol=None, wide=None,
 
   if width is None:
     width, height = 14 + common.randint(-1, 1), 14 + common.randint(-1, 1)
-    hoffset, voffset = common.randint(0, 1), common.randint(0, 1)
-    hcopies, vcopies = common.randint(1, 3), common.randint(1, 3)
     while True:
+      # Resampled together: some copy counts and offsets admit no box size.
+      hoffset, voffset = common.randint(0, 1), common.randint(0, 1)
+      hcopies, vcopies = common.randint(1, 3), common.randint(1, 3)
       wide, tall = common.randint(3, width - 2), common.randint(3, height - 2)
       eff_width = hcopies * (wide + hoffset - 1) + 1
       eff_height = vcopies * (tall + voffset - 1) + 1

@@ -30,7 +30,7 @@ def generate(size=None, colors=None, brow=None, bcol=None):
   if size is None:
     size = common.randint(10, 20)
     center = common.random_color()
-    colors = [common.random_color(exclude=[center]) for _ in range(size * size)]
+    colors = [common.random_color(exclude=[center]) for _ in range(9)]
     colors[4] = center
     brow, bcol = common.randint(1, size - 4), common.randint(1, size - 4)
 

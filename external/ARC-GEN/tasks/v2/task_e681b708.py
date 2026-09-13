@@ -96,8 +96,17 @@ def generate(width=None, height=None, rows=None, cols=None, lefts=None,
         output[row][col] = grid[row][col] = colors[color_idx]
         color_idx += 1
     # Determine the colors of the pixels.
-    pcolors = []
+    # A candidate that landed on a dividing line or an intersection is not a
+    # pixel at all -- the drawing stage below already discards it -- so discard
+    # it here too.  Left in, it reaches the loop below with a 1x1 rectangle,
+    # collects an empty subset and rejects the whole grid.
+    cprows, cpcols = [], []
     for prow, pcol in zip(prows, pcols):
+      if grid[prow][pcol] != 0: continue
+      cprows.append(prow)
+      cpcols.append(pcol)
+    pcolors = []
+    for prow, pcol in zip(cprows, cpcols):
       left, right, bottom, top = pcol, pcol, prow, prow
       while bottom + 1 < height and grid[bottom][pcol] == 0:
         bottom += 1
@@ -130,7 +139,7 @@ def generate(width=None, height=None, rows=None, cols=None, lefts=None,
       return None, None, None, None
     # Draw the pixels.
     kept_prows, kept_pcols = [], []
-    for prow, pcol, pcolor in zip(prows, pcols, pcolors):
+    for prow, pcol, pcolor in zip(cprows, cpcols, pcolors):
       if grid[prow][pcol] != 0: continue
       grid[prow][pcol] = 1
       output[prow][pcol] = pcolor
@@ -183,9 +192,13 @@ def generate(width=None, height=None, rows=None, cols=None, lefts=None,
           prows.append(row)
           pcols.append(col)
       grid, _, kept_prows, kept_pcols = draw()
-      if grid:
-        prows, pcols = kept_prows, kept_pcols
-        break
+      if not grid: continue
+      # The pixel list is narrowed to the ones actually drawn, so re-run with
+      # that list and accept only if it still holds up -- otherwise the final
+      # draw() below (which uses the narrowed list) can come back empty.
+      prows, pcols = kept_prows, kept_pcols
+      grid, _, _, _ = draw()
+      if grid: break
     else:
       raise RuntimeError("generation exhausted")
 

@@ -69,8 +69,8 @@ def generate(size=None, rows=None, cols=None, cdirs=None, expected=None):
     expected = common.randint(min_stars, max_stars)
     debris = 1
     if size == 12: debris = 3
-    if size == 16: debris = 6
-    if size == 20: debris = 20
+    if size == 16: debris = common.randint(6, 7)
+    if size == 20: debris = common.randint(20, 23)
     while True:
       rows, cols, cdirs = [], [], []
       for _ in range(expected):
@@ -83,9 +83,10 @@ def generate(size=None, rows=None, cols=None, cdirs=None, expected=None):
       if grid: break
     for _ in range(debris):
       while True:  # Keep trying to add a single debris until it succeeds.
-        rows.append(common.randint(0, size - 2))
-        cols.append(common.randint(0, size - 2))
-        cdirs.append(common.randint(0, 1))
+        cdir = common.randint(0, 1)
+        rows.append(common.randint(0, size - 2 + (0 if cdir else 1)))
+        cols.append(common.randint(0, size - 2 + (1 if cdir else 0)))
+        cdirs.append(cdir)
         grid, _ = draw()
         if grid: break
         rows.pop()

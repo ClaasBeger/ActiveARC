@@ -28,7 +28,7 @@ def generate(size=None, rows=None, cols=None, colors=None):
   """
 
   if size is None:
-    size = common.randint(12, 15)
+    size = common.randint(12, 16)
     pixels = common.randint(2, 3)
     colors = common.random_colors(pixels, exclude=[2])
     while True:

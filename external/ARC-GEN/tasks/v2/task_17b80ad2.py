@@ -48,7 +48,7 @@ def generate(size=None, cols=None, colors=None):
           if common.randint(0, 9): continue
           colors[row * size + col] = common.random_color(exclude=[5])
       col, cols = common.randint(2, 5), []
-      while col + 3 < size:
+      while col + 3 <= size:
         cols.append(col)
         col += common.randint(3, 5)
       grid, _ = draw()

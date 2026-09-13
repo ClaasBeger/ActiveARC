@@ -16,6 +16,8 @@
 
 import common
 
+_MAX_PLACEMENTS = 200
+
 
 def generate(width=None, height=None, colors=None):
   """Returns input and output grids according to the given parameters.
@@ -32,15 +34,30 @@ def generate(width=None, height=None, colors=None):
   pixel_choices = [1] * 9 + [2]
 
   if width is None:
-    base = common.randint(17, 18)
-    width, height = base + common.randint(-1, 1), base + common.randint(-1, 1)
-    num_boxes = common.randint(4, 6)
     while True:
-      wides = [common.choice(box_choices) for _ in range(num_boxes)]
-      talls = [common.choice(box_choices) for _ in range(num_boxes)]
-      brows = [common.randint(0, height - tall) for tall in talls]
-      bcols = [common.randint(0, width - wide) for wide in wides]
-      if not common.overlaps(brows, bcols, wides, talls, 1): break
+      # Grid size and box count are redrawn with the layout; 6 boxes of up to
+      # 9x9 in a 16x16 grid is not packable, and holding those fixed outside
+      # the loop leaves it spinning on an unsatisfiable constraint.
+      base = common.randint(17, 18)
+      width, height = base + common.randint(-1, 1), base + common.randint(-1, 1)
+      num_boxes = common.randint(4, 6)
+      # Place the boxes one at a time, retrying only the box that fails to fit.
+      wides, talls, brows, bcols = [], [], [], []
+      for _ in range(num_boxes):
+        for _ in range(_MAX_PLACEMENTS):
+          wide, tall = common.choice(box_choices), common.choice(box_choices)
+          brow = common.randint(0, height - tall)
+          bcol = common.randint(0, width - wide)
+          if common.overlaps(brows + [brow], bcols + [bcol],
+                             wides + [wide], talls + [tall], 1): continue
+          wides.append(wide)
+          talls.append(tall)
+          brows.append(brow)
+          bcols.append(bcol)
+          break
+        else:
+          break
+      if len(wides) == num_boxes: break
     grid = common.grid(width, height)
     for wide, tall, brow, bcol in zip(wides, talls, brows, bcols):
       while True:

@@ -33,17 +33,27 @@ def generate(width=None, height=None, brow=None, bcol=None, srows=None,
   """
 
   if width is None:
-    width, height = common.randint(12, 18), common.randint(12, 18)
-    num_sprites = common.randint(4, 6)
-    colors = common.random_colors(num_sprites, exclude=[1])
-    brow = common.randint(0, 1) * (height - 7)
-    bcol = common.randint(0, 1) * (width - 7)
+    # The grid size and the sprite count have to be part of the retry: a 7x7
+    # box in the corner of a 12x12 grid leaves an L-shaped margin that cannot
+    # hold six 3x3 sprites, so a combination drawn once up front leaves the
+    # placement loop spinning forever.
     while True:
-      srows = [common.randint(0, height - 3) for _ in range(num_sprites)]
-      scols = [common.randint(0, width - 3) for _ in range(num_sprites)]
-      if not common.overlaps([brow] + srows, [bcol] + scols,
-                             [7] + [3] * num_sprites,
-                             [7] + [3] * num_sprites, 1): break
+      width, height = common.randint(12, 18), common.randint(12, 18)
+      num_sprites = common.randint(4, 6)
+      colors = common.random_colors(num_sprites, exclude=[1])
+      brow = common.randint(0, 1) * (height - 7)
+      bcol = common.randint(0, 1) * (width - 7)
+      # Given a feasible margin the placement is usually satisfiable but rarely
+      # hit on the first try, so retry it before rerolling the grid.
+      for _ in range(200):
+        srows = [common.randint(0, height - 3) for _ in range(num_sprites)]
+        scols = [common.randint(0, width - 3) for _ in range(num_sprites)]
+        if not common.overlaps([brow] + srows, [bcol] + scols,
+                               [7] + [3] * num_sprites,
+                               [7] + [3] * num_sprites, 1): break
+      else:
+        continue
+      break
     values = []
     for _ in range(num_sprites):
       pixels = common.diagonally_connected_sprite()

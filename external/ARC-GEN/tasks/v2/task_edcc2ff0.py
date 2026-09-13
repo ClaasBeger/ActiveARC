@@ -37,22 +37,33 @@ def generate(bgcolor=None, colors=None, wides=None, talls=None, brows=None,
     subset = common.random_colors(common.randint(5, 6))
     bgcolor = subset.pop()
     colors = common.sample(subset, 3)
-    num_boxes = common.randint(5, 8)
+    num_boxes = common.randint(5, 11)
     while True:
-      sides = [common.randint(0, 2) for _ in range(num_boxes)]
-      wides, talls = [], []
-      for side in sides:
-        if side == 0:
-          wide, tall = 1, common.randint(2, 4)
-        elif side == 1:
-          wide, tall = common.randint(2, 4), 1
+      wides, talls, brows, bcols = [], [], [], []
+      placed = True
+      for _ in range(num_boxes):
+        # Place one box at a time, so that crowded grids stay reachable.
+        for _ in range(100):
+          side = common.randint(0, 2)
+          if side == 0:
+            wide, tall = 1, common.randint(2, 4)
+          elif side == 1:
+            wide, tall = common.randint(2, 4), 1
+          else:
+            wide, tall = 2, 2
+          brow = common.randint(1, 12 - tall)
+          bcol = common.randint(1, 9 - wide)
+          if common.overlaps(brows + [brow], bcols + [bcol], wides + [wide],
+                             talls + [tall], 1): continue
+          wides.append(wide)
+          talls.append(tall)
+          brows.append(brow)
+          bcols.append(bcol)
+          break
         else:
-          wide, tall = 2, 2
-        wides.append(wide)
-        talls.append(tall)
-      brows = [common.randint(1, 12 - tall) for tall in talls]
-      bcols = [common.randint(1, 9 - wide) for wide in wides]
-      if not common.overlaps(brows, bcols, wides, talls, 1):
+          placed = False
+          break
+      if placed:
         break
     bcolors = common.choices(subset, num_boxes)
     prows, pcols = [], []

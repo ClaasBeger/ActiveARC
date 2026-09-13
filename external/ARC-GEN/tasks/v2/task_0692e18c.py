@@ -28,7 +28,7 @@ def generate(rows=None, cols=None, color=None):
 
   if color is None:
     color = common.random_color()
-    rows, cols = common.conway_sprite(3, 3)
+    rows, cols = common.conway_sprite(3, 3, tries=6)
 
   grid, output = common.grid(3, 3), common.grid(9, 9)
   for row, col in zip(rows, cols):

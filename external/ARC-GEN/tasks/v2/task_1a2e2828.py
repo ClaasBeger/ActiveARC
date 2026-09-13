@@ -31,24 +31,43 @@ def generate(width=None, height=None, values=None, thicks=None, cdirs=None,
     num_h, num_v = base // 4, base // 4
     if base > 8 and common.randint(0, 1): num_h += 1
     if base > 8 and common.randint(0, 1): num_v += 1
-    while True:
-      h_thicks = [common.randint(1, min(3, height - 2)) for _ in range(num_v)]
-      v_thicks = [common.randint(1, min(3, width - 2)) for _ in range(num_v)]
-      h_vals = [common.randint(1, height - thick - 1) for thick in h_thicks]
-      v_vals = [common.randint(1, width - thick - 1) for thick in v_thicks]
-      if common.overlaps_1d(h_vals, h_thicks, 1): continue
-      if common.overlaps_1d(v_vals, v_thicks, 1): continue
-      values, thicks, cdirs = [], [], []
-      while h_thicks or v_thicks:
-        if common.randint(0, 1):
-          if not h_thicks: continue
-          thicks, values = thicks + [h_thicks.pop()], values + [h_vals.pop()]
-          cdirs.append(0)
+    def place_bands(num, extent):
+      # Place the bands one at a time, retrying only the band that doesn't fit.
+      thicks, vals = [], []
+      for _ in range(num):
+        for _ in range(200):
+          thick = common.randint(1, min(3, extent - 2))
+          val = common.randint(1, extent - thick - 1)
+          if common.overlaps_1d(vals + [val], thicks + [thick], 1): continue
+          thicks, vals = thicks + [thick], vals + [val]
+          break
         else:
-          if not v_thicks: continue
-          thicks, values = thicks + [v_thicks.pop()], values + [v_vals.pop()]
-          cdirs.append(1)
-      if cdirs[-1] != cdirs[-2]: break
+          return None, None  # This band doesn't fit; redraw the whole set.
+      return thicks, vals
+
+    while True:
+      h_thicks, h_vals = place_bands(num_h, height)
+      if h_thicks is None: continue
+      v_thicks, v_vals = place_bands(num_v, width)
+      if v_thicks is None: continue
+      # Interleave the bands; retry just the interleaving if it ends badly.
+      for _ in range(200):
+        h_left, h_vleft = list(h_thicks), list(h_vals)
+        v_left, v_vleft = list(v_thicks), list(v_vals)
+        values, thicks, cdirs = [], [], []
+        while h_left or v_left:
+          if common.randint(0, 1):
+            if not h_left: continue
+            thicks, values = thicks + [h_left.pop()], values + [h_vleft.pop()]
+            cdirs.append(0)
+          else:
+            if not v_left: continue
+            thicks, values = thicks + [v_left.pop()], values + [v_vleft.pop()]
+            cdirs.append(1)
+        if cdirs[-1] != cdirs[-2]: break
+      else:
+        continue
+      break
     colors = common.random_colors(len(values))
 
   grid, output = common.grid(width, height), common.grid(1, 1, colors[-1])

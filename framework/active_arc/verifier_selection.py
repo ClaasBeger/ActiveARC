@@ -18,11 +18,14 @@ from framework.verifier_selection import (
 
 _VALID_VERIFIERS_CACHE: Dict[str, List[Tuple[VerifierSlot, Verifier]]] = {}
 
-# Slot preferred whenever it is among a task's valid verifiers. Only ARC-AGI-1
-# tasks expose an ``re_arc`` slot; the golf slots (google/keymoon/neurips) often
-# hardcode ARC-GEN grid shapes and answer off-distribution queries with garbage
-# instead of raising, so re_arc is the safer rule to probe against.
-PREFERRED_SLOT: VerifierSlot = "re_arc"
+# Slots preferred, in order, whenever one is among a task's valid verifiers.
+# ``custom`` comes first: those are hand-written verifiers in
+# ``framework/custom_verifiers``, several of which exist precisely to fix a bug in
+# the slot they replace. ``re_arc`` comes next; the golf slots
+# (google/keymoon/neurips) often hardcode ARC-GEN grid shapes and answer
+# off-distribution queries with garbage instead of raising, so they are last.
+PREFERRED_SLOTS: tuple[VerifierSlot, ...] = ("custom", "re_arc")
+PREFERRED_SLOT: VerifierSlot = PREFERRED_SLOTS[0]  # back-compat
 
 # task_id -> index into ``list_valid_verifiers(task)``, fixed on first pick so a
 # task keeps one verifier for every operation in this process (queries, hot
@@ -50,6 +53,18 @@ def list_valid_verifiers(task: ArcTask) -> List[Tuple[VerifierSlot, Verifier]]:
     fast = list_valid_verifiers_from_csv(task)
     out: List[Tuple[VerifierSlot, Verifier]] = list(fast) if fast is not None else []
 
+    # A verifier written in framework/custom_verifiers takes precedence over the
+    # vendored ARC-AGI-2 candidates, which share the same ``custom`` slot: the
+    # local ones exist precisely because a vendored verifier was wrong or crashed.
+    if fast is None and task.quinary_verifier is not None:
+        try:
+            from framework.custom_verifiers.registry import has_local_verifier
+
+            if has_local_verifier(task.task_id):
+                out.insert(0, ("custom", task.quinary_verifier))
+        except Exception:
+            pass
+
     # Pre-validated ARC-AGI-2 standalone verifiers (official + 250 ARC-GEN).
     # Already offline-audited; do not re-probe dynamic50 here.
     added_agi2 = False
@@ -66,7 +81,7 @@ def list_valid_verifiers(task: ArcTask) -> List[Tuple[VerifierSlot, Verifier]]:
     except Exception:
         pass
 
-    if fast is None and not added_agi2:
+    if fast is None and not added_agi2 and not out:
         from framework.verifier_selection import _legacy_valid_verifiers
 
         out = _legacy_valid_verifiers(task)
@@ -101,8 +116,8 @@ def pick_verifier(
 ) -> Optional[Tuple[VerifierSlot, Verifier]]:
     """Choose one verifier for *task* and pin it for the rest of the session.
 
-    Order: a pin from an earlier trial in this session, then ``re_arc`` when it is
-    valid (ARC-AGI-1 only), then a uniform sample among the remaining slots.
+    Order: a pin from an earlier trial in this session, then ``custom``, then
+    ``re_arc``, then a uniform sample among the remaining slots.
     Returns ``None`` if the task has no valid verifier.
     """
     valid = list_valid_verifiers(task)
@@ -113,10 +128,11 @@ def pick_verifier(
     if pinned is not None:
         return pinned
 
-    index = next(
-        (i for i, (slot, _) in enumerate(valid) if slot == PREFERRED_SLOT),
-        None,
-    )
+    index = None
+    for preferred in PREFERRED_SLOTS:
+        index = next((i for i, (slot, _) in enumerate(valid) if slot == preferred), None)
+        if index is not None:
+            break
     if index is None:
         index = rng.randrange(len(valid))
     pin_verifier(task.task_id, index)

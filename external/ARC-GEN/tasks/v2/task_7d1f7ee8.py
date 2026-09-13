@@ -34,17 +34,28 @@ def generate(width=None, height=None, wides=None, talls=None, brows=None,
 
   def make_boxes(num_boxes, wide, tall, brow, bcol, inner_container, outer_container):
     nonlocal wides, talls, brows, bcols, icolors, ocolors
-    the_wides = [common.randint(1, wide) for _ in range(num_boxes)]
-    the_talls = [common.randint(1, tall) for _ in range(num_boxes)]
-    the_brows = [common.randint(brow, brow + tall - t) for t in the_talls]
-    the_bcols = [common.randint(bcol, bcol + wide - w) for w in the_wides]
+    # Place the sibling boxes one at a time, retrying only the box that
+    # clashes: drawing all of them at once and rejecting the whole set on the
+    # first clash makes the acceptance rate collapse as num_boxes grows.
+    the_wides, the_talls, the_brows, the_bcols = [], [], [], []
+    for _ in range(num_boxes):
+      for _ in range(200):
+        w, t = common.randint(1, wide), common.randint(1, tall)
+        r = common.randint(brow, brow + tall - t)
+        c = common.randint(bcol, bcol + wide - w)
+        if common.overlaps(the_brows + [r], the_bcols + [c], the_wides + [w],
+                           the_talls + [t], 1): continue
+        the_wides, the_talls = the_wides + [w], the_talls + [t]
+        the_brows, the_bcols = the_brows + [r], the_bcols + [c]
+        break
+      else:
+        return False  # This box doesn't fit; redraw from the top.
     exclude = []
     if inner_container != -1: exclude.append(inner_container)
     if outer_container != -1: exclude.append(outer_container)
     the_icolors = common.random_colors(num_boxes, exclude=exclude)
     the_ocolors = the_icolors
     if outer_container != -1: the_ocolors = [outer_container for _ in range(num_boxes)]
-    if common.overlaps(the_brows, the_bcols, the_wides, the_talls, 1): return False
     wides.extend(the_wides)
     talls.extend(the_talls)
     brows.extend(the_brows)

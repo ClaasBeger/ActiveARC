@@ -49,9 +49,9 @@ def generate(width=None, height=None, line=None, rows=None, cols=None):
     width = common.randint(3, 8)
     height = width + common.randint(2, 4)
     line = common.randint(3, height - 1)
-    num_pixels = common.randint(1, (width + 1) // 2)
-    expected_bounces = True if common.randint(0, 4) else False
     while True:
+      num_pixels = common.randint(1, (width + 2) // 2)
+      expected_bounces = True if common.randint(0, 4) else False
       rows = common.sample(list(range(height - 1)), num_pixels)
       cols = common.sample(list(range(width)), num_pixels)
       grid, _, bounces = draw()

@@ -72,7 +72,7 @@ def generate(width=None, height=None, rows=None, cols=None):
 
   if width is None:
     width, height = common.randint(15, 30), common.randint(15, 30)
-    path_length = (width + height) // 6 + 1
+    path_length = common.randint(3, (width + height) // 6 + 1)
     while True:
       row, col = common.randint(1, height - 3), common.randint(1, width - 3)
       rows, cols = [], []

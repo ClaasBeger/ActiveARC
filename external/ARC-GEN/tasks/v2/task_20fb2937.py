@@ -30,11 +30,22 @@ def generate(rows=None, cols=None, colors=None, bcolors=None, pcolors=None):
 
   if rows is None:
     num_boxes = common.randint(8, 9)
+    # Place the boxes one at a time: drawing all nine at once and throwing the
+    # whole layout away on the first clash left this generator at about one
+    # picture a second.
     while True:
-      rows = [common.randint(0, 10) for _ in range(num_boxes)]
-      cols = [common.randint(0, 8) for _ in range(num_boxes)]
-      if not common.overlaps(rows, cols, [3] * num_boxes, [3] * num_boxes):
-        break
+      rows, cols = [], []
+      for _ in range(num_boxes):
+        for _ in range(200):
+          row, col = common.randint(0, 10), common.randint(0, 8)
+          if not common.overlaps(rows + [row], cols + [col],
+                                 [3] * (len(rows) + 1), [3] * (len(rows) + 1)):
+            rows.append(row)
+            cols.append(col)
+            break
+        else:
+          break
+      if len(rows) == num_boxes: break
     colors = common.sample([0, 1, 2, 3, 4, 5, 6, 8, 9], 6)
     bcolors, pcolors = colors[0:3], colors[3:6]
     colors = [common.randint(0, 2) for _ in range(num_boxes)]

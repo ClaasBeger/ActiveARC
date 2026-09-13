@@ -54,8 +54,11 @@ def generate(rows=None, cols=None, angles=None, colors=None):
       angles = [2 * common.randint(0, 1) - 1 for _ in range(num_diags)]
       if extra_line:
         rows.append(15)
-        cols.append(common.randint(6, 10))
-        angles.append(2 * common.randint(0, 1) - 1)
+        angle = 2 * common.randint(0, 1) - 1
+        # The line runs to the grid edge in the direction of the angle, so
+        # pick a start that keeps it at least five cells long either way.
+        cols.append(common.randint(6, 15) if angle < 0 else common.randint(1, 10))
+        angles.append(angle)
       colors = common.sample([1, 2, 3, 4, 5, 6, 8, 9], len(rows))
       grid, _ = draw()
       if grid: break

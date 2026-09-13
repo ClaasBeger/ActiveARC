@@ -50,10 +50,13 @@ ARC-AGI-1 tasks can have several validated verifiers (`re_arc`, the golf slots
 `google` / `keymoon` / `neurips`, and `custom`; see `task_valid_verifiers.csv`).
 Two rules keep a trial honest:
 
-- **`re_arc` wins.** When it is among a task's valid verifiers it is always the
-  one chosen; otherwise a remaining slot is sampled uniformly. Golf verifiers
-  frequently hardcode ARC-GEN grid shapes and answer off-distribution queries
-  with well-formed garbage instead of raising.
+- **`custom` first, then `re_arc`.** Hand-written verifiers in
+  `framework/custom_verifiers` take precedence — several exist precisely to fix a
+  bug in the slot they replace (e.g. `83302e8f`, where re_arc seals a merged
+  lattice region because it is still a rectangle). `re_arc` is next; otherwise a
+  remaining slot is sampled uniformly. Golf verifiers frequently hardcode ARC-GEN
+  grid shapes and answer off-distribution queries with well-formed garbage
+  instead of raising.
 - **One verifier per task per session.** The chosen callable is pinned (in
   `framework/active_arc/verifier_selection.py`) and answers every query,
   hot-start pair, test sample and final answer for that task — including later

@@ -60,27 +60,40 @@ def generate(width=None, height=None, wides=None, talls=None, brows=None,
     return grid, output
 
   if width is None:
-    width, height = common.randint(24, 28), common.randint(24, 28)
-    num_boxes = common.randint(5, 6)
     while True:
+      # The grid size and the box count have to be part of the retry: six boxes
+      # of up to 9x9 plus their beams can be impossible to fit into a 24x24
+      # grid, so a combination drawn once up front leaves the loop spinning.
+      width, height = common.randint(24, 28), common.randint(24, 28)
+      num_boxes = common.randint(5, 6)
       wides = [common.randint(3, 9) for _ in range(num_boxes)]
       talls = [common.randint(3, 9) for _ in range(num_boxes)]
-      brows = [common.randint(1, height - t - 1) for t in talls]
-      bcols = [common.randint(1, width - w - 1) for w in wides]
-      if common.overlaps(brows, bcols, wides, talls, 1): continue
-      prows, pcols = [-1] * num_boxes, [-1] * num_boxes
-      for i in range(num_boxes):
-        # Choose which side the "notch" should go (0 = no notch)
-        side = common.randint(0, 4)
-        if side in [1, 2] and talls[i] >= 5:
-          prows[i] = common.randint(2, talls[i] - 3)
-          pcols[i] = 0 if side == 1 else (wides[i] - 1)
-        if side in [3, 4] and wides[i] >= 5:
-          prows[i] = 0 if side == 3 else (talls[i] - 1)
-          pcols[i] = common.randint(2, wides[i] - 3)
-      if prows.count(-1) > 2: continue  # at most 2 boxes should be dormant.
-      grid, _ = draw()
-      if grid: break
+      # Given feasible sizes the packing is usually satisfiable but rarely hit
+      # on the first try, so retry the positions before rerolling the sizes.
+      for _ in range(200):
+        brows = [common.randint(1, height - t - 1) for t in talls]
+        bcols = [common.randint(1, width - w - 1) for w in wides]
+        if not common.overlaps(brows, bcols, wides, talls, 1): break
+      else:
+        continue
+      # The notches only depend on the box sizes, so retry them on their own
+      # rather than throwing away a perfectly good packing.
+      for _ in range(200):
+        prows, pcols = [-1] * num_boxes, [-1] * num_boxes
+        for i in range(num_boxes):
+          # Choose which side the "notch" should go (0 = no notch)
+          side = common.randint(0, 4)
+          if side in [1, 2] and talls[i] >= 5:
+            prows[i] = common.randint(2, talls[i] - 3)
+            pcols[i] = 0 if side == 1 else (wides[i] - 1)
+          if side in [3, 4] and wides[i] >= 5:
+            prows[i] = 0 if side == 3 else (talls[i] - 1)
+            pcols[i] = common.randint(2, wides[i] - 3)
+        if prows.count(-1) > 2: continue  # at most 2 boxes should be dormant.
+        if draw()[0]: break
+      else:
+        continue
+      break
 
   grid, output = draw()
   return {"input": grid, "output": output}

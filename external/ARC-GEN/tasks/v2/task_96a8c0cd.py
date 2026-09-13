@@ -54,13 +54,59 @@ def generate(width=None, height=None, rows=None, cols=None, colors=None,
   if width is None:
     width, height = common.randint(15, 30), common.randint(12, 13)
     lines = common.randint(4, 2 * width // 3)
+
+    def place_lines():
+      # Place the lines one at a time, retrying only the line that clashes.
+      rows, cols = [], []
+      for _ in range(lines):
+        for _ in range(200):
+          row, col = common.randint(-1, height - 2), common.randint(2, width - 2)
+          taken = len(rows) + 1
+          if common.overlaps(rows + [row], cols + [col], [2] * taken,
+                             [4] * taken): continue
+          rows, cols = rows + [row], cols + [col]
+          break
+        else:
+          return None, None  # This line doesn't fit; redraw the whole layout.
+      return rows, cols
+
+    def zigzags(the_colors, the_prow, the_xpose):
+      # The same walk draw() does, but straight off the layout: the line
+      # positions are fixed, so there is no need to rebuild a grid per try.
+      # Each line's color is an independent coin flip, so flip it lazily, the
+      # first time the diagonal actually runs into that line.
+      row, col, zags = the_prow, 0, 0
+      up, down = 1 + 2 * the_xpose, 3 - 2 * the_xpose
+      while True:
+        if row < 0 or col < 0 or row >= height or col >= width: return -1
+        if col + 1 >= width: return zags
+        idx = cells.get((row, col + 1))
+        if idx is None:
+          col += 1
+          continue
+        if the_colors[idx] is None:
+          the_colors[idx] = 2 * common.randint(1, 2) - 1
+        if the_colors[idx] == up: row, zags = row - 1, zags + 1
+        elif the_colors[idx] == down: row, zags = row + 1, zags + 1
+        else: col += 1
+
     while True:
-      rows = [common.randint(-1, height - 2) for _ in range(lines)]
-      cols = [common.randint(2, width - 2) for _ in range(lines)]
-      if common.overlaps(rows, cols, [2] * lines, [4] * lines): continue
-      colors = [2 * common.randint(1, 2) - 1 for _ in range(lines)]
-      prow, xpose = common.randint(3, height - 4), common.randint(0, 1)
-      grid, output = draw()
+      rows, cols = place_lines()
+      if rows is None: continue
+      cells = {}
+      for idx, (row, col) in enumerate(zip(rows, cols)):
+        for r in range(3):
+          if 0 <= row + r < height: cells[(row + r, col)] = idx
+      # Keep the layout, and retry just the colors and the starting pixel.
+      grid = None
+      for _ in range(100):
+        colors = [None] * lines
+        prow, xpose = common.randint(3, height - 4), common.randint(0, 1)
+        if zigzags(colors, prow, xpose) < 10: continue
+        for idx in range(lines):
+          if colors[idx] is None: colors[idx] = 2 * common.randint(1, 2) - 1
+        grid, output = draw()
+        if grid: break
       if grid: break
 
   grid, output = draw()

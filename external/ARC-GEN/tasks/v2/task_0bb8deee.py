@@ -38,7 +38,10 @@ def generate(width=None, height=None, rows=None, cols=None, groups=None,
 
   if width is None:
     width, height = common.randint(12, 16), common.randint(12, 16)
-    trow, tcol = common.randint(3, height - 3), common.randint(3, width - 3)
+    # Groups 2/3 need `grow` in [trow + 1, height - 3] and groups 1/3 need
+    # `gcol` in [tcol + 1, width - 3], so trow/tcol may not exceed dim - 4:
+    # at dim - 3 those ranges are empty and no sprite placement exists at all.
+    trow, tcol = common.randint(3, height - 4), common.randint(3, width - 4)
     gcolors = common.random_colors(5)
     tcolor = gcolors.pop()
     rows, cols, groups, grows, gcols = [], [], [], [], []

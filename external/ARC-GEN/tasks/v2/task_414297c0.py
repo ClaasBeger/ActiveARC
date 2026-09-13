@@ -42,24 +42,48 @@ def generate(inwidth=None, inheight=None, outwidth=None, outheight=None,
     bgcolor = common.random_color(exclude=[2])
     hues = common.random_colors(num_boxes, exclude=[2, bgcolor])
     # First, make sure we can get nonoverlapping input / output positions.
+    inwidth, inheight = common.randint(15, 30), common.randint(15, 30)
+    attempts = 0
     while True:
-      inwidth, inheight = common.randint(15, 30), common.randint(15, 30)
+      attempts += 1
+      if attempts > 200:  # This grid is too crowded for this many sprites.
+        inwidth, inheight = common.randint(15, 30), common.randint(15, 30)
+        attempts = 0
       outwidth = common.randint(inwidth // 3, 2 * inwidth // 3)
       outheight = common.randint(inheight // 3, 2 * inheight // 3)
       brow = common.randint(1, inheight - outheight - 1)
       bcol = common.randint(1, inwidth - outwidth - 1)
-      irows = [common.randint(1, inheight - 4) for _ in range(num_boxes)]
-      icols = [common.randint(1, inwidth - 4) for _ in range(num_boxes)]
-      orows = [common.randint(0, outheight - 3) for _ in range(num_boxes)]
-      ocols = [common.randint(0, outwidth - 3) for _ in range(num_boxes)]
-      rows, cols = [brow] + irows, [bcol] + icols
-      wides, talls = [outwidth] + [3] * num_boxes, [outheight] + [3] * num_boxes
-      if common.overlaps(rows, cols, wides, talls, 1): continue
-      if common.overlaps(orows, ocols, [3] * num_boxes, [3] * num_boxes):
-        continue
-      if common.some_abutted(orows, ocols, [3] * num_boxes, [3] * num_boxes):
-        continue
-      break
+      # Place one sprite at a time, so that crowded grids stay reachable.
+      irows, icols, placed = [], [], True
+      for _ in range(num_boxes):
+        for _ in range(100):
+          irow = common.randint(1, inheight - 4)
+          icol = common.randint(1, inwidth - 4)
+          rows, cols = [brow] + irows + [irow], [bcol] + icols + [icol]
+          count = len(irows) + 1
+          wides, talls = [outwidth] + [3] * count, [outheight] + [3] * count
+          if common.overlaps(rows, cols, wides, talls, 1): continue
+          irows, icols = irows + [irow], icols + [icol]
+          break
+        else:
+          placed = False
+          break
+      if not placed: continue
+      orows, ocols = [], []
+      for _ in range(num_boxes):
+        for _ in range(100):
+          orow = common.randint(0, outheight - 3)
+          ocol = common.randint(0, outwidth - 3)
+          rows, cols = orows + [orow], ocols + [ocol]
+          sides = [3] * len(rows)
+          if common.overlaps(rows, cols, sides, sides): continue
+          if common.some_abutted(rows, cols, sides, sides): continue
+          orows, ocols = rows, cols
+          break
+        else:
+          placed = False
+          break
+      if placed: break
     # Second, shift rows/cols to be center-oriented, and (sometimes) drop a box.
     irows, icols = [irow + 1 for irow in irows], [icol + 1 for icol in icols]
     orows, ocols = [orow + 1 for orow in orows], [ocol + 1 for ocol in ocols]

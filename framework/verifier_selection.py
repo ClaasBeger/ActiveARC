@@ -23,7 +23,8 @@ _DEFAULT_CSV = _ROOT / "task_valid_verifiers.csv"
 _CSV_SLOTS: dict[str, list[VerifierSlot]] | None = None
 _CSV_LOADED_FROM: Path | None = None
 
-_PRIORITY: tuple[VerifierSlot, ...] = ("re_arc", "google", "keymoon", "neurips", "custom")
+# custom first: hand-written verifiers correct bugs in the slot they replace.
+_PRIORITY: tuple[VerifierSlot, ...] = ("custom", "re_arc", "google", "keymoon", "neurips")
 
 
 def default_verifiers_csv_path() -> Path:

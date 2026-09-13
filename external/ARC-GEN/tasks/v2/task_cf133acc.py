@@ -57,6 +57,7 @@ def generate(vcols=None, vlengths=None, vcolors=None, hrows=None, hlengths=None,
     mid = common.randint(6, 8)
     vcols = [common.randint(1, mid - 2), common.randint(mid + 2, 13)]
     vcolors = common.random_colors(2)
+    if common.randint(0, 3) == 0: vcolors = [vcolors[0], vcolors[0]]
     vlengths = [common.randint(1, 6), common.randint(1, 6)]
     while True:
       num_hrows = common.randint(2, 6)
@@ -74,7 +75,6 @@ def generate(vcols=None, vlengths=None, vcolors=None, hrows=None, hlengths=None,
           hlengths.append(15)
       grid, _ = draw()
       if grid: break
-    print(mid, hsides, hlengths)
 
   grid, output = draw()
   return {"input": grid, "output": output}

@@ -31,7 +31,7 @@ def generate(size=None, angle=None, val=None, colors=None):
     size = common.randint(8, 18)
     colors = [common.randint(0, 1) for _ in range(size * size)]
     angle = common.randint(0, 3)
-    val = common.randint(1, size - 2)
+    val = common.randint(1, size - 2) if angle < 2 else 0
 
   grid, output = common.grids(size, size)
   for i, color in enumerate(colors):

@@ -48,9 +48,20 @@ def generate(width=None, height=None, brows=None, bcols=None, wides=None,
           wides.append(w)
           talls.append(t)
           break
-      brows = [common.randint(0, height - tall) for tall in talls]
-      bcols = [common.randint(0, width - wide) for wide in wides]
-      if not common.overlaps(brows, bcols, wides, talls, 1): break
+      # Place the boxes one at a time, retrying only the box that clashes.
+      brows, bcols = [], []
+      for wide, tall in zip(wides, talls):
+        for _ in range(200):
+          brow = common.randint(0, height - tall)
+          bcol = common.randint(0, width - wide)
+          taken = len(brows) + 1
+          if common.overlaps(brows + [brow], bcols + [bcol], wides[:taken],
+                             talls[:taken], 1): continue
+          brows, bcols = brows + [brow], bcols + [bcol]
+          break
+        else:
+          break  # This box doesn't fit; redraw the whole layout.
+      if len(brows) == len(wides): break
     while True:
       pixels = common.random_pixels(wides[0] - 2, talls[0] - 2)
       if not pixels: continue

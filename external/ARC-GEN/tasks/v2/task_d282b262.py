@@ -29,7 +29,7 @@ def generate(sizes=None, brows=None, bcols=None, evens=None, odds=None):
   """
 
   if sizes is None:
-    num_boxes = common.randint(5, 6)
+    num_boxes = common.randint(4, 6)
     while True:
       sizes = [common.randint(2, 5) for _ in range(num_boxes)]
       brows = [common.randint(0, 15 - s) for s in sizes]

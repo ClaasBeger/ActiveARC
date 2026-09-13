@@ -28,18 +28,22 @@ def generate(width=None, height=None, cols=None, colors=None):
   """
 
   if width is None:
-    # First, decide the grid dimensions + number of lines + size of bases.
-    num_lines, height = common.randint(1, 2), common.randint(15, 30)
-    bases = [3 if common.randint(0, 1) else 5 for _ in range(num_lines)]
-    if num_lines == 1:
-      width = 2 * common.randint(3, 7) + 1
-      cols = [width // 2]
-    else:
-      side, mid = common.randint(0, 2), common.randint(2, 4)
-      width = sum(bases) + 2 * side + mid
-      cols = [bases[0] // 2 + side, width - bases[1] // 2 - 1 - side]
-    # Next, determine the colors and spacing of each line.
+    # The grid height and the base sizes have to be part of the retry: a base
+    # of 5 needs nine marks plus their spacing plus another `base` rows of
+    # clearance, which simply does not fit into a height of 15, so a height
+    # drawn once up front leaves the spacing loop spinning forever.
     while True:
+      # First, decide the grid dimensions + number of lines + size of bases.
+      num_lines, height = common.randint(1, 2), common.randint(15, 30)
+      bases = [3 if common.randint(0, 1) else 5 for _ in range(num_lines)]
+      if num_lines == 1:
+        width = 2 * common.randint(3, 7) + 1
+        cols = [width // 2]
+      else:
+        side, mid = common.randint(0, 2), common.randint(2, 4)
+        width = sum(bases) + 2 * side + mid
+        cols = [bases[0] // 2 + side, width - bases[1] // 2 - 1 - side]
+      # Next, determine the colors and spacing of each line.
       colors, good = [], True
       for base in bases:
         hues = []

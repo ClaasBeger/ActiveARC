@@ -16,6 +16,8 @@
 
 import common
 
+_MAX_PLACEMENTS = 200
+
 
 def generate(width=None, height=None, wides=None, talls=None, rows=None, cols=None, colors=None):
   """Returns input and output grids according to the given parameters.
@@ -31,16 +33,32 @@ def generate(width=None, height=None, wides=None, talls=None, rows=None, cols=No
   """
 
   if width is None:
-    width = common.randint(12, 20)
-    height = width + common.randint(0, 4) - 2
-    num_boxes = common.randint(1, 4)
-    colors = common.random_colors(num_boxes)
     while True:
-      wides = [common.randint(5, 12) for _ in range(num_boxes)]
-      talls = [common.randint(5, 12) for _ in range(num_boxes)]
-      rows = [common.randint(0, height - t) for t in talls]
-      cols = [common.randint(0, width - w) for w in wides]
-      if not common.overlaps(rows, cols, wides, talls, 1): break
+      # The grid size and the box count are redrawn together with the layout:
+      # combinations such as 4 boxes of 5x5 or more in a 12x10 grid admit no
+      # packing at all, and keeping them fixed outside the loop wedges it.
+      width = common.randint(12, 20)
+      height = width + common.randint(0, 4) - 2
+      num_boxes = common.randint(1, 4)
+      # Place the boxes one at a time, retrying only the box that fails to fit.
+      wides, talls, rows, cols = [], [], [], []
+      for _ in range(num_boxes):
+        for _ in range(_MAX_PLACEMENTS):
+          wide, tall = common.randint(5, 12), common.randint(5, 12)
+          if wide > width or tall > height: continue
+          row, col = common.randint(0, height - tall), common.randint(0, width - wide)
+          if common.overlaps(rows + [row], cols + [col],
+                             wides + [wide], talls + [tall], 1): continue
+          wides.append(wide)
+          talls.append(tall)
+          rows.append(row)
+          cols.append(col)
+          break
+        else:
+          break
+      if len(wides) < num_boxes: continue
+      colors = common.random_colors(num_boxes)
+      break
 
   grid, output = common.grids(width, height)
   for wide, tall, row, col, color in zip(wides, talls, rows, cols, colors):

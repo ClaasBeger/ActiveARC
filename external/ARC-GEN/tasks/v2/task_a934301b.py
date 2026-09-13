@@ -16,6 +16,9 @@
 
 import common
 
+_MAX_PLACEMENTS = 200
+_MAX_SPECKLINGS = 5000
+
 
 def generate(width=None, height=None, wides=None, talls=None, brows=None,
              bcols=None, prows=None, pcols=None, pidxs=None):
@@ -26,27 +29,48 @@ def generate(width=None, height=None, wides=None, talls=None, brows=None,
   """
 
   if width is None:
-    base = common.randint(13, 15)
-    width = base + common.randint(-1, 1)
-    height = base + common.randint(-1, 1)
-    num_boxes = common.randint(6, 7)
     while True:
-      wides = [common.randint(2, 6) for _ in range(num_boxes)]
-      talls = [common.randint(2, 6) for _ in range(num_boxes)]
-      brows = [common.randint(0, height - tall) for tall in talls]
-      bcols = [common.randint(0, width - wide) for wide in wides]
-      if not common.overlaps(brows, bcols, wides, talls, 1): break
-    while True:
-      prows, pcols, pidxs, num_small = [], [], [], 0
-      for i in range(num_boxes):
-        for r in range(talls[i]):
-          for c in range(wides[i]):
-            if common.randint(0, 9): continue
-            prows.append(r)
-            pcols.append(c)
-            pidxs.append(i)
-        if pidxs.count(i) < 2: num_small += 1
-      if num_small == 3: break
+      # Grid size and box count are redrawn with the layout: 7 boxes of up to
+      # 6x6 do not pack into a 12x12 grid, and holding them fixed outside the
+      # loop leaves it retrying a constraint that can never be met.
+      base = common.randint(13, 15)
+      width = base + common.randint(-1, 1)
+      height = base + common.randint(-1, 1)
+      num_boxes = common.randint(6, 7)
+      # Place the boxes one at a time, retrying only the box that fails to fit.
+      wides, talls, brows, bcols = [], [], [], []
+      for _ in range(num_boxes):
+        for _ in range(_MAX_PLACEMENTS):
+          wide, tall = common.randint(2, 6), common.randint(2, 6)
+          brow = common.randint(0, height - tall)
+          bcol = common.randint(0, width - wide)
+          if common.overlaps(brows + [brow], bcols + [bcol],
+                             wides + [wide], talls + [tall], 1): continue
+          wides.append(wide)
+          talls.append(tall)
+          brows.append(brow)
+          bcols.append(bcol)
+          break
+        else:
+          break
+      if len(wides) < num_boxes: continue
+      # Exactly three boxes must end up with fewer than two speckles.  How
+      # likely that is depends on the box sizes just drawn, so on exhaustion
+      # fall back to the outer loop and redraw the layout too.
+      for _ in range(_MAX_SPECKLINGS):
+        prows, pcols, pidxs, num_small = [], [], [], 0
+        for i in range(num_boxes):
+          for r in range(talls[i]):
+            for c in range(wides[i]):
+              if common.randint(0, 9): continue
+              prows.append(r)
+              pcols.append(c)
+              pidxs.append(i)
+          if pidxs.count(i) < 2: num_small += 1
+        if num_small == 3: break
+      else:
+        continue
+      break
 
   grid, output = common.grids(width, height)
   for i, (wide, tall, brow, bcol) in enumerate(zip(wides, talls, brows, bcols)):

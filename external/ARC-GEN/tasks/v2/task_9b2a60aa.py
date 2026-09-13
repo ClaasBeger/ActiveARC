@@ -54,6 +54,9 @@ def generate(width=None, height=None, row=None, cols=None, colors=None,
         cols.append(cols[-1] + common.randint(2, 5))
       prows, pcols = common.conway_sprite(3, 3, 3)
       if not common.connected(list(zip(prows, pcols))): continue
+      # The official examples use all four turns of the picture; the sampler
+      # never set these, so only one of the four was reachable.
+      flop, xpose = common.randint(0, 1), common.randint(0, 1)
       grid, _ = draw()
       if grid: break
 

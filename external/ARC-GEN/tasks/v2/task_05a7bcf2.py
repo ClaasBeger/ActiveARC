@@ -36,7 +36,7 @@ def generate(yrows=None, ycols=None, ytalls=None, brow=None, drow=None,
     yrows, ycols, ytalls = [], [], []
     ycol = 0
     while True:
-      ycol += common.randint(1, 5)
+      ycol += common.randint(1, 6)
       wide = common.randint(2, 5)
       if ycol + wide + 1 >= 30: break
       yrow = common.randint(0, 7)

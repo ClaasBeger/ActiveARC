@@ -34,10 +34,13 @@ def generate(width=None, height=None, cdir=None, switch=None, vals=None,
     width, height = common.randint(6, 10), common.randint(6, 10)
     cdir, switch = common.randint(0, 1), common.randint(0, 1)
     val, vals = -1, []
+    length = width if cdir else height
+    step = common.randint(2, min(6, length - 1))
     while True:
-      val += common.randint(2, 4)
-      if val + 1 >= (width if cdir else height): break
+      val += step
+      if val + 1 >= length: break
       vals.append(val)
+      step = common.randint(2, 4)
     colors = [0 if common.randint(0, 1) else 6 for _ in range(width * height)]
 
   grid, output = common.grids(width, height)

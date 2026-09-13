@@ -16,6 +16,20 @@
 
 import common
 
+_MAX_PLACEMENTS = 200
+
+# Cell offsets of each shape, keyed by its color.
+_SHAPES = {
+    2: ((0, 0), (1, 0), (2, 0)),
+    3: ((0, 1), (1, 0), (1, 1), (1, 2), (2, 1)),
+    4: ((0, 0), (0, 1), (1, 1)),
+    5: ((0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2)),
+    8: ((0, 0), (0, 1), (1, 1), (1, 2)),
+    9: ((0, 0), (1, 0)),
+}
+_TALLS = {color: max(dr for dr, _ in s) + 1 for color, s in _SHAPES.items()}
+_WIDES = {color: max(dc for _, dc in s) + 1 for color, s in _SHAPES.items()}
+
 
 def generate(rows=None, cols=None, colors=None):
   """Returns input and output grids according to the given parameters.
@@ -39,35 +53,8 @@ def generate(rows=None, cols=None, colors=None):
       hidden[r][c] = index
     for row, col, color in zip(rows, cols, colors):
       index += 1
-      if color == 2:
-        put(row, col, 2)
-        put(row + 1, col, 2)
-        put(row + 2, col, 2)
-      if color == 3:
-        put(row, col + 1, 3)
-        put(row + 1, col, 3)
-        put(row + 1, col + 1, 3)
-        put(row + 1, col + 2, 3)
-        put(row + 2, col + 1, 3)
-      if color == 4:
-        put(row, col, 4)
-        put(row, col + 1, 4)
-        put(row + 1, col + 1, 4)
-      if color == 5:
-        put(row, col, 5)
-        put(row, col + 1, 5)
-        put(row, col + 2, 5)
-        put(row + 1, col, 5)
-        put(row + 1, col + 1, 5)
-        put(row + 1, col + 2, 5)
-      if color == 8:
-        put(row, col, 8)
-        put(row, col + 1, 8)
-        put(row + 1, col + 1, 8)
-        put(row + 1, col + 2, 8)
-      if color == 9:
-        put(row, col, 9)
-        put(row + 1, col, 9)
+      for dr, dc in _SHAPES[color]:
+        put(row + dr, col + dc, color)
     # Check that no two colors share an adjacent edge.
     for r in range(9):
       for c in range(8):
@@ -81,17 +68,34 @@ def generate(rows=None, cols=None, colors=None):
     return grid, output
 
   if rows is None:
-    extra = common.randint(0, 2)
     while True:
-      wides = [0, 0, 1, 3, 2, 3, 0, 0, 3, 1]
-      talls = [0, 0, 3, 3, 2, 2, 0, 0, 2, 2]
+      # The number of extra shapes is redrawn on every restart, so a count the
+      # grid cannot hold cannot wedge the loop.
+      extra = common.randint(0, 2)
       colors = [2, 3, 4, 5, 8, 9]
       colors += common.sample(colors, extra)
       colors = common.shuffle(colors)
-      wides = [wides[color] for color in colors]
-      talls = [talls[color] for color in colors]
-      rows = [common.randint(0, 9 - tall) for tall in talls]
-      cols = [common.randint(0, 9 - wide) for wide in wides]
+      # Place the shapes one at a time, retrying only the shape that fails to
+      # fit.  Drawing every position at once and rejecting the whole layout
+      # essentially never lands eight mutually non-adjacent shapes on a 9x9
+      # grid, which is the case the first official example uses.
+      rows, cols, taken = [], [], {}
+      for index, color in enumerate(colors):
+        for _ in range(_MAX_PLACEMENTS):
+          row = common.randint(0, 9 - _TALLS[color])
+          col = common.randint(0, 9 - _WIDES[color])
+          cells = [(row + dr, col + dc) for dr, dc in _SHAPES[color]]
+          # A shape may neither overlap nor share an edge with another shape.
+          if any(taken.get((r + dr, c + dc), index) != index
+                 for r, c in cells
+                 for dr, dc in ((0, 0), (0, 1), (0, -1), (1, 0), (-1, 0))): continue
+          for cell in cells: taken[cell] = index
+          rows.append(row)
+          cols.append(col)
+          break
+        else:
+          break
+      if len(rows) < len(colors): continue
       grid, _ = draw()
       if grid: break
 

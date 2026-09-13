@@ -31,7 +31,7 @@ def generate(width=None, height=None, rows=None, cols=None, wides=None,
   """
 
   if width is None:
-    width, height = common.randint(18, 22), common.randint(18, 22)
+    width, height = common.randint(18, 22), common.randint(17, 22)
     num_lines = common.randint(1, 3)
     while True:
       sizes = [common.randint(5, 14) for _ in range(num_lines)]

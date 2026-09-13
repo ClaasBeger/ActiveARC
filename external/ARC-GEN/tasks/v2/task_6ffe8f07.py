@@ -16,7 +16,8 @@
 
 import common
 
-_MAX_ATTEMPTS = 100_000
+_MAX_ATTEMPTS = 1000
+_MAX_PLACEMENTS = 200
 
 
 def generate(width=None, height=None, wides=None, talls=None, brows=None, bcols=None, colors=None):
@@ -33,15 +34,38 @@ def generate(width=None, height=None, wides=None, talls=None, brows=None, bcols=
   """
 
   if width is None:
-    width, height = common.randint(18, 19), common.randint(18, 19)
-    num_boxes = common.randint(4, 12)
     for _ in range(_MAX_ATTEMPTS):
-      wides = [common.randint(2, 7) for _ in range(num_boxes)]
-      talls = [common.randint(2, 7) for _ in range(num_boxes)]
-      wides[-1] = common.randint(2, 13)  # Sometimes one of them is very long.
-      brows = [common.randint(0, height - tall) for tall in talls]
-      bcols = [common.randint(0, width - wide) for wide in wides]
-      if common.overlaps(brows, bcols, wides, talls, 1): continue
+      # Every parameter the packing depends on is redrawn on each restart, so a
+      # box count that happens not to fit the grid cannot wedge the sampler.
+      width, height = common.randint(18, 19), common.randint(18, 19)
+      num_boxes = common.randint(4, 12)
+      # Place the boxes one at a time, retrying only the box that fails to fit.
+      # Drawing all of them at once and rejecting the whole layout needs
+      # millions of tries once num_boxes passes ~9, which is where the official
+      # examples (10 and 11 boxes) live.
+      wides, talls, brows, bcols = [], [], [], []
+      for box in range(num_boxes):
+        for _ in range(_MAX_PLACEMENTS):
+          wide, tall = common.randint(2, 7), common.randint(2, 7)
+          if box == num_boxes - 1:
+            # Sometimes one of them is very long -- in either direction: the
+            # official test example has both a 8-wide and a 8-tall box.
+            if common.randint(0, 1):
+              wide = common.randint(2, 13)
+            else:
+              tall = common.randint(2, 13)
+          brow = common.randint(0, height - tall)
+          bcol = common.randint(0, width - wide)
+          if common.overlaps(brows + [brow], bcols + [bcol],
+                             wides + [wide], talls + [tall], 1): continue
+          wides.append(wide)
+          talls.append(tall)
+          brows.append(brow)
+          bcols.append(bcol)
+          break
+        else:
+          break
+      if len(wides) < num_boxes: continue
       colors = [common.randint(1, 2) for _ in range(num_boxes)]
       colors[0] = 8
       if len(set(colors)) == 3: break

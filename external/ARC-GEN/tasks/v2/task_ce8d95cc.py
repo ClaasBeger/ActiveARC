@@ -32,14 +32,16 @@ def generate(width=None, height=None, cdirs=None, vals=None, colors=None):
     width, height = common.randint(8, 13), common.randint(8, 13)
     while True:
       cdirs, vals = [], []
+      # cdir=0 draws a horizontal line at row `val` (so val must be < height);
+      # cdir=1 draws a vertical line at column `val` (so val must be < width).
       row = common.randint(1, 4)
       while row + 1 < height:
-        cdirs.append(1)
+        cdirs.append(0)
         vals.append(row)
         row += common.randint(2, 5)
       col = common.randint(1, 4)
       while col + 1 < width:
-        cdirs.append(0)
+        cdirs.append(1)
         vals.append(col)
         col += common.randint(2, 5)
       if len(cdirs) <= 9: break

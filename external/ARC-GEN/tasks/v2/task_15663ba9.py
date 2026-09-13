@@ -76,35 +76,54 @@ def generate(width=None, height=None, color=None, brows=None, bcols=None,
   if width is None:
     width, height = common.randint(12, 16), common.randint(12, 16)
     color, num_boxes = common.random_color(exclude=[2, 4]), common.randint(2, 3)
+    def place_boxes():
+      # Place the boxes one at a time, retrying only the box that clashes.
+      wides, talls, brows, bcols = [], [], [], []
+      for _ in range(num_boxes):
+        for _ in range(200):
+          wide, tall = common.randint(3, 10), common.randint(3, 10)
+          brow = common.randint(0, height - tall)
+          bcol = common.randint(0, width - wide)
+          if common.overlaps(brows + [brow], bcols + [bcol], wides + [wide],
+                             talls + [tall], 1): continue
+          wides, talls = wides + [wide], talls + [tall]
+          brows, bcols = brows + [brow], bcols + [bcol]
+          break
+        else:
+          return None  # This box doesn't fit; redraw the whole layout.
+      return wides, talls, brows, bcols
+
     while True:
-      wides = [common.randint(3, 10) for _ in range(num_boxes)]
-      talls = [common.randint(3, 10) for _ in range(num_boxes)]
-      brows = [common.randint(0, height - tall) for tall in talls]
-      bcols = [common.randint(0, width - wide) for wide in wides]
-      if common.overlaps(brows, bcols, wides, talls, 1): continue
-      lengthss, turnss, idxss = [], [], []
-      for bidx, (wide, tall) in enumerate(zip(wides, talls)):
-        lengths = [wide, tall, wide, tall]
-        turns = ["R", "R", "R", "R"]
-        idxs = [bidx] * 4
-        for _ in range((wide + tall) // 4):
-          idx = common.randint(0, len(lengths) - 1)
-          if lengths[idx] < 5: continue
-          segment = common.randint(3, lengths[idx] - 2)
-          start = common.randint(1, lengths[idx] - segment - 1)
-          depth = common.randint(2, 4)
-          length = [start + 1, depth, segment, depth, lengths[idx] - (start + segment) + 1]
-          turn = ["L", "R", "R", "L"] if common.randint(0, 1) else ["R", "L", "L", "R"]
-          lengths = lengths[:idx] + length + lengths[idx + 1:]
-          turns = turns[:idx] + turn + turns[idx:]
-          idxs = idxs[:idx] + [bidx] * 4 + idxs[idx:]
-        lengthss.extend(lengths)
-        turnss.extend(turns)
-        idxss.extend(idxs)
-      lengthss = "".join(str(length) for length in lengthss)
-      turnss = "".join(turnss)
-      idxss = "".join(str(idx) for idx in idxss)
-      grid, _ = draw()
+      placed = place_boxes()
+      if placed is None: continue
+      wides, talls, brows, bcols = placed
+      # Keep the boxes, and retry just the notches carved into their sides.
+      grid = None
+      for _ in range(50):
+        lengthss, turnss, idxss = [], [], []
+        for bidx, (wide, tall) in enumerate(zip(wides, talls)):
+          lengths = [wide, tall, wide, tall]
+          turns = ["R", "R", "R", "R"]
+          idxs = [bidx] * 4
+          for _ in range((wide + tall) // 4):
+            idx = common.randint(0, len(lengths) - 1)
+            if lengths[idx] < 5: continue
+            segment = common.randint(3, lengths[idx] - 2)
+            start = common.randint(1, lengths[idx] - segment - 1)
+            depth = common.randint(2, 4)
+            length = [start + 1, depth, segment, depth, lengths[idx] - (start + segment) + 1]
+            turn = ["L", "R", "R", "L"] if common.randint(0, 1) else ["R", "L", "L", "R"]
+            lengths = lengths[:idx] + length + lengths[idx + 1:]
+            turns = turns[:idx] + turn + turns[idx:]
+            idxs = idxs[:idx] + [bidx] * 4 + idxs[idx:]
+          lengthss.extend(lengths)
+          turnss.extend(turns)
+          idxss.extend(idxs)
+        lengthss = "".join(str(length) for length in lengthss)
+        turnss = "".join(turnss)
+        idxss = "".join(str(idx) for idx in idxss)
+        grid, _ = draw()
+        if grid: break
       if grid: break
 
   grid, output = draw()

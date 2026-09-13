@@ -31,8 +31,8 @@ def generate(width=None, height=None, size=None, brow=None, bcol=None,
   """
 
   if width is None:
-    width, height = common.randint(11, 14), common.randint(11, 14)
-    size = 2 * common.randint(3, 4) + 1
+    width, height = common.randint(11, 14), common.randint(10, 14)
+    size = 2 * common.randint(3, min(4, (min(width, height) - 3) // 2)) + 1
     brow = common.randint(1, height - size - 1)
     bcol = common.randint(1, width - size - 1)
     colors = common.random_colors(4, exclude=[5])

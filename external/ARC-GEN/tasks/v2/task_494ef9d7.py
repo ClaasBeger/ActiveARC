@@ -43,7 +43,7 @@ def generate(width=None, height=None, colors=None):
     return grid, output, matches
 
   if width is None:
-    expected_matches = common.randint(2, 4)
+    expected_matches = common.randint(1, 4)
     while True:
       width, height = common.randint(3, 10), common.randint(3, 10)
       colors = []

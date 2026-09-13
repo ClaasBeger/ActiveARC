@@ -31,10 +31,11 @@ def generate(width=None, height=None, row=None, cols=None):
     width, height = common.randint(10, 25), common.randint(8, 21)
     row = common.randint(1, height // 2)
     cols = []
-    mod = 0
-    for c in range(width):
-      if c % 2 == mod: cols.append(c)
-      if common.randint(0, 3) == 0: mod = (mod + 1) % 2
+    while not cols:
+      mod = common.randint(0, 1)
+      for c in range(width):
+        if c % 2 == mod: cols.append(c)
+        if common.randint(0, 3) == 0: mod = (mod + 1) % 2
 
   grid, output = common.grids(width, height, 3)
   for col in cols:

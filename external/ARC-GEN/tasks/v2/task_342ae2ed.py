@@ -65,11 +65,28 @@ def generate(brows=None, bcols=None, sizes=None, lengths=None, colors=None,
     lines = common.randint(3, 5)
     colors = common.sample([0, 1, 2, 3, 4, 5, 6, 8, 9], lines)
     while True:
-      sizes = [common.randint(2, 3) for _ in range(lines)]
-      lengths = [common.randint(2, 6) for _ in range(lines)]
-      brows = [common.randint(0, dim - 2 * size - length) for size, length in zip(sizes, lengths)]
-      bcols = [common.randint(0, dim - size) for size in sizes]
-      angles = [2 * common.randint(0, 1) - 1 for _ in range(lines)]
+      sizes, lengths, brows, bcols, angles = [], [], [], [], []
+      for _ in range(lines):
+        # Whether a shape fits inside the grid depends on that shape alone, so
+        # resample just that shape rather than discarding the whole layout.
+        # Same distribution, far fewer rounds: the old loop needed ~33k rounds
+        # on average for five lines, so five-line grids never beat a timeout.
+        while True:
+          size, length = common.randint(2, 3), common.randint(2, 6)
+          brow = common.randint(0, dim - 2 * size - length)
+          bcol = common.randint(0, dim - size)
+          angle = 2 * common.randint(0, 1) - 1
+          # The trailing box ends at bcol + 2 * size + length - 1 heading
+          # right, and starts at bcol - size - length heading left.
+          if angle == 1 and bcol + 2 * size + length > dim: continue
+          if angle == -1 and bcol - size - length < 0: continue
+          break
+        sizes.append(size)
+        lengths.append(length)
+        brows.append(brow)
+        bcols.append(bcol)
+        angles.append(angle)
+      if len(set(sizes)) == 1 or len(set(angles)) == 1: continue
       grid, _ = draw()
       if grid: break
 

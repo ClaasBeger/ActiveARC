@@ -53,7 +53,7 @@ def generate(width=None, height=None, color=None, rows=None, cols=None):
     return grid, output
 
   if width is None:
-    width, height = common.randint(3, 6), common.randint(3, 6)
+    width, height = common.randint(3, 6), common.randint(2, 6)
     color = common.random_color(exclude=[1, 3])
     while True:
       points = common.randint(1, 3)

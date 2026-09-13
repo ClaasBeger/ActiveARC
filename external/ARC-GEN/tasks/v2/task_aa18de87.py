@@ -26,14 +26,17 @@ def generate(width=None, height=None, bottom=None, top=None, start=None,
   """
 
   def draw():
-    nonlocal start, cdir
+    # NB: the zigzag state is kept local. Mutating `start`/`cdir` in the
+    # enclosing scope would mean the draw that the sampling loop accepts is not
+    # the draw that gets returned.
     grid, output = common.grids(width, height)
+    srow, sdir = start, cdir
     for c in range(width):
-      common.draw(grid, start, c, color)
-      common.draw(output, start, c, color)
-      if start == bottom: cdir = 1
-      if start + 1 == top: cdir = -1
-      start += cdir
+      common.draw(grid, srow, c, color)
+      common.draw(output, srow, c, color)
+      if srow == bottom: sdir = 1
+      if srow + 1 == top: sdir = -1
+      srow += sdir
     good = False
     for row in range(height):
       for col in range(width):

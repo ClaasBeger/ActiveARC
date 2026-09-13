@@ -29,8 +29,10 @@ def generate(wides=None, talls=None, colors=None):
   if wides is None:
     num_wides, num_talls = common.randint(2, 5), common.randint(2, 5)
     while True:
-      wides = [common.randint(2, 10) for _ in range(num_wides)]
-      talls = [common.randint(2, 10) for _ in range(num_talls)]
+      wides = [common.randint(2, 15 - 2 * (num_wides - 1))
+               for _ in range(num_wides)]
+      talls = [common.randint(2, 15 - 2 * (num_talls - 1))
+               for _ in range(num_talls)]
       colors = [common.random_color() for _ in range(num_wides * num_talls)]
       if sum(wides) < 12 or sum(wides) > 15: continue
       if sum(talls) < 12 or sum(talls) > 15: continue

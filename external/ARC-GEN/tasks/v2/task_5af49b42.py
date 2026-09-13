@@ -84,6 +84,14 @@ def generate(width=None, height=None, northwests=None, northeasts=None,
       if 1 in angles: northeasts = common.random_colors(common.randint(3, 6))
       if 2 in angles: southwests = common.random_colors(common.randint(3, 6))
       if 3 in angles: southeasts = common.random_colors(common.randint(3, 6))
+      # Two legends sharing an edge must be separated by at least one empty
+      # cell. Butted up against each other they read as one long legend, and
+      # then a pixel can be lined up against either splitting of that row, so
+      # the puzzle has more than one answer.
+      if northwests and northeasts and len(northwests) + len(northeasts) >= width:
+        continue
+      if southwests and southeasts and len(southwests) + len(southeasts) >= width:
+        continue
       num_points = common.randint(3, 6)
       point_angles = common.choices(angles, num_points)
       if len(set(point_angles)) != len(angles): continue

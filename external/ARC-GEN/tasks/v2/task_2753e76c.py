@@ -33,13 +33,25 @@ def generate(brows=None, bcols=None, lengths=None, colors=None):
     while True:
       counts = common.sample(list(range(1, 6)), num_colors)
       brows, bcols, lengths, colors = [], [], [], []
+      placed = True
       for color, count in zip(subset, counts):
         sizes = common.choices([2, 2, 2, 2, 3, 3, 3, 4, 4, 5], count)
-        brows.extend([common.randint(0, 16 - size) for size in sizes])
-        bcols.extend([common.randint(0, 16 - size) for size in sizes])
-        lengths.extend(sizes)
-        colors.extend([color] * count)
-      if not common.overlaps(brows, bcols, lengths, lengths, 1): break
+        for size in sizes:
+          # Place one box at a time, so that crowded grids stay reachable.
+          for _ in range(100):
+            brow, bcol = common.randint(0, 16 - size), common.randint(0, 16 - size)
+            if common.overlaps(brows + [brow], bcols + [bcol], lengths + [size],
+                               lengths + [size], 1): continue
+            brows.append(brow)
+            bcols.append(bcol)
+            lengths.append(size)
+            colors.append(color)
+            break
+          else:
+            placed = False
+            break
+        if not placed: break
+      if placed: break
 
   grid = common.grid(16, 16)
   for brow, bcol, length, color in zip(brows, bcols, lengths, colors):
