@@ -59,12 +59,72 @@ def _parse_args() -> argparse.Namespace:
         help="Leave records that already carry a program_eval untouched.",
     )
     p.add_argument(
+        "--guard",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Drop evaluation pairs the task verifier cannot reproduce "
+        "(framework.tasks.pair_guard). On by default; --no-guard scores against "
+        "raw generator labels.",
+    )
+    p.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="Score this many trials in parallel (default 1).",
+    )
+    p.add_argument(
         "--write",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Write results back into the trial JSONs (default: true).",
     )
     return p.parse_args()
+
+
+STABLE_DIR = ROOT_DIR / "experiments" / "stable_sets"
+
+
+def _safe_name(task_id: str) -> str:
+    return task_id.replace("/", "__")
+
+
+def _frozen_set(dataset: str, task_id: str):
+    """The frozen evaluation set for this task, and whether it exhausts its generator.
+
+    Returns ``(pairs, exhausted, n_distinct)`` or ``(None, False, 0)`` when the
+    task has no frozen set and the committed pool should stand in.
+    """
+    import gzip
+
+    from framework.grids import GridPair
+
+    base = STABLE_DIR / dataset / _safe_name(task_id)
+    for path, opener in ((base.with_suffix(".json.gz"), gzip.open),
+                         (base.with_suffix(".json"), open)):
+        if not path.is_file():
+            continue
+        with opener(path, "rt", encoding="utf-8") as fh:
+            data = json.load(fh)
+        pairs = data["pairs"] if isinstance(data, dict) else data
+        meta = data if isinstance(data, dict) else {}
+        return ([GridPair(p["input"], p["output"]) for p in pairs],
+                bool(meta.get("exhausted")), len(pairs))
+    return None, False, 0
+
+
+def _task_verifier(record: Dict[str, Any], task):
+    """The oracle the trial queried: pinned slot for ARC, custom for the rest."""
+    dataset = record.get("dataset", "arc")
+    if dataset in ("parc", "conceptarc"):
+        return task.quinary_verifier or task.verifier
+    from framework.active_arc.verifier_selection import list_valid_verifiers
+
+    slot = (record.get("trial") or {}).get("verifier_slot")
+    valid = list_valid_verifiers(task)
+    for s, fn in valid:
+        if s == slot:
+            return fn
+    return valid[0][1] if valid else task.verifier
 
 
 def _load_task(record: Dict[str, Any]):
@@ -83,6 +143,47 @@ def _load_task(record: Dict[str, Any]):
     return load_task(task_id, load_alternative_verifiers=False)
 
 
+
+def _score_one(payload: tuple) -> Dict[str, Any]:
+    """Score one trial. Runs in a worker process; returns plain data only."""
+    (path_str, dynamic_n, call_timeout_s, seed_override, use_guard) = payload
+    path = Path(path_str)
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {"path": path_str, "unreadable": f"{type(e).__name__}: {e}"}
+    trial = record.get("trial") or {}
+    task_id = record.get("task_id", path.stem)
+    code = trial.get("program_source")
+    if not code:
+        return {"path": path_str, "task_id": task_id, "no_program": True}
+    seed = seed_override if seed_override is not None else int(record.get("seed") or 0)
+    try:
+        task = _load_task(record)
+    except Exception as e:
+        return {"path": path_str, "task_id": task_id, "error": f"{type(e).__name__}: {e}"}
+    guard = _task_verifier(record, task) if use_guard else None
+    dataset = record.get("dataset", "arc")
+    stable, exhausted, n_stable = _frozen_set(dataset, task_id)
+    bottlenecked = bool(stable is not None and (exhausted or n_stable < dynamic_n))
+    report = evaluate_program(
+        task,
+        code,
+        rng=random.Random(seed),
+        dynamic_n=dynamic_n,
+        call_timeout_s=call_timeout_s,
+        guard_verifier=guard,
+        stable_pairs=stable,
+        skip_dynamic=bottlenecked,
+    )
+    result = report.to_dict()
+    result["stable_source"] = "frozen" if stable is not None else "committed_pool"
+    result["dynamic_skipped"] = bottlenecked
+    return {"path": path_str, "task_id": task_id, "result": result,
+            "loaded": report.loaded, "load_error": report.error,
+            "query_count": record.get("query_count")}
+
+
 def main() -> None:
     args = _parse_args()
     run_dir = Path(args.run_dir)
@@ -95,66 +196,69 @@ def main() -> None:
 
     rows: List[Dict[str, Any]] = []
     t0 = time.perf_counter()
-    for i, path in enumerate(paths, 1):
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except Exception as e:
-            print(f"[{i}/{len(paths)}] {path.name}: unreadable ({e})", flush=True)
-            continue
-        trial = record.get("trial") or {}
-        task_id = record.get("task_id", path.stem)
-        code: Optional[str] = trial.get("program_source")
 
-        if args.skip_scored and trial.get("program_eval"):
-            print(f"[{i}/{len(paths)}] {task_id}: already scored", flush=True)
-            rows.append({"task_id": task_id, "skipped": True, "correct": record.get("correct")})
-            continue
-        if not code:
-            print(f"[{i}/{len(paths)}] {task_id}: no program recorded", flush=True)
+    todo = []
+    for path in paths:
+        if args.skip_scored:
+            try:
+                rec = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                rec = {}
+            if ((rec.get("trial") or {}).get("program_eval")):
+                rows.append({"task_id": rec.get("task_id", path.stem), "skipped": True,
+                             "correct": rec.get("correct")})
+                continue
+        todo.append((str(path), args.dynamic_n, args.call_timeout_s, args.seed, args.guard))
+
+    def _emit(i: int, out: Dict[str, Any]) -> None:
+        task_id = out.get("task_id", "?")
+        if out.get("unreadable"):
+            print(f"[{i}/{len(todo)}] {task_id}: unreadable ({out['unreadable']})", flush=True)
+            return
+        if out.get("no_program"):
+            print(f"[{i}/{len(todo)}] {task_id}: no program recorded", flush=True)
             rows.append({"task_id": task_id, "no_program": True})
-            continue
-
-        seed = args.seed if args.seed is not None else int(record.get("seed") or 0)
-        try:
-            task = _load_task(record)
-        except Exception as e:
-            print(f"[{i}/{len(paths)}] {task_id}: task load failed ({type(e).__name__}: {e})", flush=True)
-            rows.append({"task_id": task_id, "error": f"{type(e).__name__}: {e}"})
-            continue
-
-        report = evaluate_program(
-            task,
-            code,
-            rng=random.Random(seed),
-            dynamic_n=args.dynamic_n,
-            call_timeout_s=args.call_timeout_s,
-        )
-        result = report.to_dict()
+            return
+        if out.get("error"):
+            print(f"[{i}/{len(todo)}] {task_id}: task load failed ({out['error']})", flush=True)
+            rows.append({"task_id": task_id, "error": out["error"]})
+            return
+        result = out["result"]
         sets = " ".join(f"{k}={v['n_correct']}/{v['n']}" for k, v in result["sets"].items())
-        print(
-            f"[{i}/{len(paths)}] {task_id}: correct={result['all_correct']} {sets}"
-            + ("" if report.loaded else f" load_error={report.error}"),
-            flush=True,
-        )
-
+        if result.get("dynamic_skipped"):
+            sets += " (dynamic skipped: generator exhausted)"
+        print(f"[{i}/{len(todo)}] {task_id}: correct={result['all_correct']} {sets}"
+              + ("" if out.get("loaded") else f" load_error={out.get('load_error')}"), flush=True)
         if args.write:
+            path = Path(out["path"])
+            record = json.loads(path.read_text(encoding="utf-8"))
+            trial = record.get("trial") or {}
             trial["program_eval"] = result
             trial["program_eval_deferred"] = False
             record["trial"] = trial
             record["correct"] = result["all_correct"]
             path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+        rows.append({
+            "task_id": task_id,
+            "correct": result["all_correct"],
+            "loaded": result["loaded"],
+            "accuracy": result["accuracy"],
+            "n_total": result["n_total"],
+            "query_count": out.get("query_count"),
+            "sets": {k: [v["n_correct"], v["n"]] for k, v in result["sets"].items()},
+        })
 
-        rows.append(
-            {
-                "task_id": task_id,
-                "correct": result["all_correct"],
-                "loaded": result["loaded"],
-                "accuracy": result["accuracy"],
-                "n_total": result["n_total"],
-                "query_count": record.get("query_count"),
-                "sets": {k: [v["n_correct"], v["n"]] for k, v in result["sets"].items()},
-            }
-        )
+    if args.jobs > 1:
+        import multiprocessing as mp
+
+        # spawn, not fork: the vendored ARC-AGI-2 verifiers import numpy, which
+        # fails in a process forked from one that already loaded it.
+        with mp.get_context("spawn").Pool(args.jobs) as pool:
+            for i, out in enumerate(pool.imap(_score_one, todo), 1):
+                _emit(i, out)
+    else:
+        for i, payload in enumerate(todo, 1):
+            _emit(i, _score_one(payload))
 
     scored = [r for r in rows if "correct" in r and not r.get("skipped")]
     n_correct = sum(1 for r in scored if r.get("correct"))
@@ -163,6 +267,7 @@ def main() -> None:
         "scored_at": datetime.now(timezone.utc).isoformat(),
         "run_dir": str(run_dir),
         "dynamic_n": args.dynamic_n,
+        "guard": args.guard,
         "seed": args.seed,
         "n_records": len(paths),
         "n_scored": len(scored),
