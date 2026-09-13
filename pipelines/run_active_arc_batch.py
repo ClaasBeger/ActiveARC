@@ -106,6 +106,15 @@ def _parse_args() -> argparse.Namespace:
         default=True,
         help="Skip tasks whose per-task JSON already exists (default: true).",
     )
+    p.add_argument(
+        "--task-id",
+        type=str,
+        action="append",
+        default=None,
+        dest="task_ids",
+        help="Run only these task ids (repeatable). Overrides --offset/--limit, "
+        "which is what you want when redoing a handful of trials in place.",
+    )
     return p.parse_args()
 
 
@@ -116,6 +125,8 @@ def _conceptarc_sort_key(task_id: str) -> tuple[str, int, str]:
 
 
 def _task_ids(args: argparse.Namespace) -> list[str]:
+    if args.task_ids:
+        return list(args.task_ids)
     if args.dataset == "arc":
         ids = list_arc_agi_1_task_ids()
         if not ids:

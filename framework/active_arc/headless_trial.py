@@ -33,17 +33,42 @@ def normalize_query_grid(grid: Grid) -> Grid:
     ]
 
 
+def _is_answer_grid(grid: Any) -> bool:
+    """Whether this is a real answer: a rectangle of colours and nothing else."""
+    if not isinstance(grid, list) or not grid:
+        return False
+    width = len(grid[0]) if isinstance(grid[0], list) else -1
+    if width <= 0:
+        return False
+    for row in grid:
+        if not isinstance(row, list) or len(row) != width:
+            return False
+        for cell in row:
+            if isinstance(cell, bool) or not isinstance(cell, int) or not 0 <= cell <= 9:
+                return False
+    return True
+
+
 def _run_trial_verifier(inp: Grid, verifier: Verifier) -> Grid:
     """Run the trial's pinned verifier. Raises ``RuntimeError`` if it fails.
 
     Only this one verifier ever answers, so every query, hot-start pair, test
     sample and answer check in a trial comes from the same rule; falling back to
     another valid slot would silently mix rules within a session.
+
+    A verifier that raises is easy to spot. The harder case is one that returns
+    something that is not a grid at all -- a cell of ``None``, or a value like 11
+    -- which some slots do when a query falls outside the shapes they were
+    written against. That is not an answer, so it is treated as a failure rather
+    than shown to the model.
     """
     try:
-        return clone_grid(verifier(copy.deepcopy(inp)))
+        out = verifier(copy.deepcopy(inp))
     except Exception as e:
         raise RuntimeError(f"Trial verifier failed: {type(e).__name__}: {e}") from e
+    if not _is_answer_grid(out):
+        raise RuntimeError("Trial verifier returned something that is not a grid of colours")
+    return clone_grid(out)
 
 
 @dataclass
