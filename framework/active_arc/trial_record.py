@@ -46,8 +46,11 @@ def build_trial_record(
             "fixed_test": fixed_test,
             "wrong_answer_penalty": session.announced_wrong_answer_penalty(),
             "forced_queries": session.forced_queries,
+            "test_source": session.test_source,
         },
         "evidence_test": result.get("evidence_test"),
+        "test_item_correct": list(session.test_item_correct),
+        "test_item_kinds": list(session.test_item_kinds),
         "n_evidence_pairs": len(session.evidence_pairs_json()),
         "trial": {
             "verifier_slot": session.verifier_slot,

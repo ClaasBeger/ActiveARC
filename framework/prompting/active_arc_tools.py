@@ -57,13 +57,18 @@ _SUBMIT_FINAL_ANSWER_TOOL: Dict[str, Any] = {
     "type": "function",
     "name": "submit_final_answer",
     "description": (
-        "Testing stage only. Submit your predicted output grid for the test input. "
-        "Same shape as test_input_grid; each cell an integer 0–9."
+        "Testing stage only. Submit your predicted output grid for the test input, "
+        "each cell an integer 0-9. When the testing stage showed several inputs in "
+        "test_input_grids, pass grids instead: one output per input, in the order "
+        "they were shown."
     ),
     "parameters": {
         "type": "object",
-        "properties": {"grid": _GRID_SCHEMA},
-        "required": ["grid"],
+        "properties": {
+            "grid": _GRID_SCHEMA,
+            "grids": {"type": ["array", "null"], "items": _GRID_SCHEMA},
+        },
+        "required": ["grid", "grids"],
         "additionalProperties": False,
     },
     "strict": True,
@@ -413,6 +418,9 @@ def execute_tool_call(
         return session.submit_program(args.get("code"))
 
     if name == "submit_final_answer":
+        grids = args.get("grids") if isinstance(args, dict) else None
+        if isinstance(grids, list) and grids:
+            return session.submit_final_answer(grids=grids)
         grid = args.get("grid")
         if not isinstance(grid, list):
             return {"ok": False, "error": "Missing or invalid grid for submit_final_answer."}

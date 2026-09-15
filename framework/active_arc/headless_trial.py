@@ -111,6 +111,14 @@ class ActiveArcTrialSession:
     # before testing, so its evidence count matches the other arms. None = the
     # model decides when to stop, which is the free-interaction condition.
     forced_queries: Optional[int] = None
+    # Which held-out items the test phase asks about: the trial's generator-sampled
+    # pair, the task's own authored item(s), or both. All of them are shown at once
+    # and answered in the exploration conversation, so the reasoning built up across
+    # queries is still in hand -- which is the whole point of an active trial.
+    test_source: str = "sampled"
+    test_items: List[Tuple[Grid, Grid]] = field(default_factory=list)
+    test_item_correct: List[bool] = field(default_factory=list)
+    test_item_kinds: List[str] = field(default_factory=list)
 
     def remaining_forced_queries(self) -> Optional[int]:
         if self.forced_queries is None:
@@ -326,17 +334,49 @@ class ActiveArcTrialSession:
             self.test_round += 1
         self.phase = "test"
         assert self.test_pair is not None
-        ti = clone_grid(self.test_pair.input)
-        self.shown_test_inputs.append((self.test_round, clone_grid(ti)))
+
+        items: List[Tuple[Grid, Grid]] = []
+        kinds: List[str] = []
+        if self.test_source in ("official", "both"):
+            for oi, oo in self.official_test_items():
+                items.append((oi, oo))
+                kinds.append("official")
+        if self.test_source in ("sampled", "both"):
+            items.append((clone_grid(self.test_pair.input), clone_grid(self.test_pair.output)))
+            kinds.append("sampled")
+        if not items:
+            items = [(clone_grid(self.test_pair.input), clone_grid(self.test_pair.output))]
+            kinds = ["sampled"]
+        self.test_items = items
+        self.test_item_kinds = kinds
+        self.test_item_correct = []
+        for ti_grid, _ in items:
+            self.shown_test_inputs.append((self.test_round, clone_grid(ti_grid)))
+
+        if len(items) == 1:
+            return {
+                "ok": True,
+                "test_input_grid": clone_grid(items[0][0]),
+                "phase": self.phase,
+                "test_round": self.test_round,
+                "message": (
+                    "Testing stage. Apply the same transformation rule to test_input_grid and "
+                    "submit your predicted output grid with submit_final_answer "
+                    "(JSON array of rows; each cell an integer 0–9)."
+                ),
+            }
         return {
             "ok": True,
-            "test_input_grid": ti,
+            "test_input_grids": [clone_grid(g) for g, _ in items],
+            "n_test_items": len(items),
             "phase": self.phase,
             "test_round": self.test_round,
             "message": (
-                "Testing stage. Apply the same transformation rule to test_input_grid and "
-                "submit your predicted output grid with submit_final_answer "
-                "(JSON array of rows; each cell an integer 0–9)."
+                f"Testing stage. There are {len(items)} test inputs, shown together in "
+                "test_input_grids. Apply the same transformation rule to each and submit "
+                "all of your predicted output grids in one submit_final_answer call, as "
+                '\"grids\": a list in the same order. You will not be told whether any '
+                "of them is right."
             ),
         }
 
@@ -425,8 +465,14 @@ class ActiveArcTrialSession:
             out["load_error"] = load_error
         return out
 
-    def submit_final_answer(self, grid: Grid) -> Dict[str, Any]:
-        """Score against verifier on the test input."""
+    def submit_final_answer(self, grid: Any = None, grids: Any = None) -> Dict[str, Any]:
+        """Score the answer(s) for the item(s) the test phase asked about.
+
+        A single-item trial keeps the original ``grid`` argument and behaviour.
+        When several items were shown together, ``grids`` carries one answer per
+        item in the order shown, and the trial is correct only if every one of
+        them is -- the same all-or-nothing rule the static arm is scored by.
+        """
         if self.program_test:
             return {
                 "ok": False,
@@ -437,21 +483,46 @@ class ActiveArcTrialSession:
                 "ok": False,
                 "error": f"submit_final_answer only in test phase (now: {self.phase}).",
             }
-        if self.test_pair is None:
+        if self.test_pair is None and not self.test_items:
             return {"ok": False, "error": "No test sample; call request_test first."}
-        ti = clone_grid(self.test_pair.input)
-        try:
-            pred = normalize_query_grid(clone_grid(grid))
-            validate_grid(pred)
-        except ValueError:
-            return {"ok": False, "error": INVALID_INPUT_OR_RULE_MESSAGE}
 
-        try:
-            gold = _run_trial_verifier(ti, self._verifier_fn())
-        except RuntimeError:
-            return {"ok": False, "error": INVALID_INPUT_OR_RULE_MESSAGE}
+        items = self.test_items or [
+            (clone_grid(self.test_pair.input), clone_grid(self.test_pair.output))
+        ]
+        if len(items) > 1:
+            answers = grids if grids is not None else grid
+            if not isinstance(answers, list) or len(answers) != len(items):
+                return {
+                    "ok": False,
+                    "error": (
+                        f"This trial has {len(items)} test inputs: submit "
+                        f'"grids" as a list of {len(items)} output grids, in the '
+                        "order they were shown."
+                    ),
+                }
+        else:
+            answers = [grids[0] if isinstance(grids, list) and grids else grid]
 
-        ok = is_equal_grid(pred, gold)
+        preds: List[Grid] = []
+        for a in answers:
+            try:
+                pred = normalize_query_grid(clone_grid(a))
+                validate_grid(pred)
+            except (ValueError, TypeError):
+                return {"ok": False, "error": INVALID_INPUT_OR_RULE_MESSAGE}
+            preds.append(pred)
+
+        per_item: List[bool] = []
+        for pred, (ti_grid, gold_out) in zip(preds, items):
+            gold = gold_out
+            if gold is None:
+                try:
+                    gold = _run_trial_verifier(ti_grid, self._verifier_fn())
+                except RuntimeError:
+                    return {"ok": False, "error": INVALID_INPUT_OR_RULE_MESSAGE}
+            per_item.append(is_equal_grid(pred, gold))
+        self.test_item_correct = per_item
+        ok = all(per_item)
         penalty = self.announced_wrong_answer_penalty()
         if not ok and penalty > 0:
             self.query_count += penalty
@@ -881,6 +952,7 @@ def create_trial_session(
     sample_family: bool = False,
     persist_sampled_family: bool = False,
     forced_queries: Optional[int] = None,
+    test_source: str = "sampled",
 ) -> ActiveArcTrialSession:
     """Build a trial matching the Streamlit app (random eligible task or fixed ``task_id``).
 
@@ -1013,4 +1085,5 @@ def create_trial_session(
         defer_program_eval=defer_program_eval,
         test_correct=None,
         forced_queries=forced_queries,
+        test_source=test_source,
     )

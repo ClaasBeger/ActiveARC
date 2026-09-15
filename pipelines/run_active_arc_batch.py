@@ -82,12 +82,22 @@ def _parse_args() -> argparse.Namespace:
         "likes (free interaction).",
     )
     p.add_argument(
+        "--test-source",
+        choices=["sampled", "official", "both"],
+        default="sampled",
+        help="Which held-out item(s) the test phase asks about, answered in the "
+        "exploration conversation so the reasoning built up across queries is kept: "
+        "the trial's generator-sampled pair (default), the task's own authored "
+        "item(s) -- what the static arm is scored on -- or both, shown together.",
+    )
+    p.add_argument(
         "--evidence-test",
         choices=["none", "official", "sampled", "both"],
         default="none",
-        help="After exploring, re-answer held-out items from the gathered pairs alone, "
-        "in fresh context: the task's own official item(s), the trial's sampled one, "
-        "or both. Scores the evidence rather than the conversation.",
+        help="Optional diagnostic, off by default. Re-answers held-out items from the "
+        "gathered pairs alone in a fresh context, discarding the exploration "
+        "reasoning -- a reset-copy reading of whether the evidence carries the rule. "
+        "Not the trial's score; use --test-source for that.",
     )
     p.add_argument("--evidence-max-turns", type=int, default=8)
     p.add_argument("--max-turns", type=int, default=64)
@@ -253,6 +263,7 @@ def _run_one(args: argparse.Namespace, task_id: str) -> dict:
         seed=args.seed,
         task_id=task_id,
         forced_queries=forced,
+        test_source=args.test_source,
         hot_start=args.hot_start,
         noisy_science=args.noisy_science,
         re_trials=args.re_trials,
