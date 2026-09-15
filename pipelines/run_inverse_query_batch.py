@@ -25,6 +25,7 @@ if str(ROOT_DIR) not in sys.path:
 from framework.inverse_query.records import build_inverse_query_record
 from framework.inverse_query.session import create_inverse_query_session
 from framework.prompting.active_arc_tools import DEFAULT_OPENAI_MODEL
+from framework.prompting.clients import PROVIDERS, resolve_model, resolve_provider
 from framework.prompting.inverse_query_responses import run_inverse_query_responses_loop
 from pipelines.run_active_arc_batch import _output_basename, _task_ids
 
@@ -51,7 +52,16 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--teacher-model", type=str, default=None,
                    help="Teacher model (default: --model).")
     p.add_argument("--student-model", type=str, default=None,
-                   help="Student model (default: --model).")
+                   help="Student model (default: --model). An OpenRouter id looks "
+                        "like qwen/qwen3-30b-a3b-instruct.")
+    p.add_argument("--provider", choices=list(PROVIDERS), default=None,
+                   help="Provider for both roles unless overridden below; default "
+                        "inferred per role from the model id.")
+    p.add_argument("--teacher-provider", choices=list(PROVIDERS), default=None,
+                   help="Provider for the teacher (default: --provider, else inferred).")
+    p.add_argument("--student-provider", choices=list(PROVIDERS), default=None,
+                   help="Provider for the student (default: --provider, else inferred). "
+                        "Set this to hold one student fixed across teacher families.")
     p.add_argument(
         "--teacher-check",
         action=argparse.BooleanOptionalAction,
@@ -99,6 +109,9 @@ def _run_one(args: argparse.Namespace, task_id: str) -> dict:
         max_turns=args.max_turns,
         student_max_turns=args.student_max_turns,
         reasoning_effort=reasoning_effort,
+        provider=args.provider,
+        teacher_provider=args.teacher_provider,
+        student_provider=args.student_provider,
     )
     return build_inverse_query_record(session, result)
 
@@ -153,13 +166,22 @@ def main() -> None:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    _teacher_provider = resolve_provider(
+        args.teacher_provider or args.provider, args.teacher_model or args.model
+    )
+    _student_provider = resolve_provider(
+        args.student_provider or args.provider, args.student_model or args.model
+    )
+
     manifest = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "setting": "inverse_query",
         "dataset": args.dataset,
         "model": args.model or DEFAULT_OPENAI_MODEL,
-        "teacher_model": args.teacher_model or args.model or DEFAULT_OPENAI_MODEL,
-        "student_model": args.student_model or args.model or DEFAULT_OPENAI_MODEL,
+        "teacher_model": resolve_model(_teacher_provider, args.teacher_model or args.model),
+        "student_model": resolve_model(_student_provider, args.student_model or args.model),
+        "teacher_provider": _teacher_provider,
+        "student_provider": _student_provider,
         "teacher_check": args.teacher_check,
         "sample": args.sample,
         "explicit_task_ids": list(args.task_ids or []),

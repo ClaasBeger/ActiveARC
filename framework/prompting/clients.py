@@ -73,8 +73,31 @@ def resolve_model(provider: str, model: Optional[str] = None) -> str:
 
 
 def supports_responses_api(provider: str) -> bool:
-    """OpenRouter exposes Chat Completions only."""
+    """Both providers serve /responses, including function calling."""
+    return provider in PROVIDERS
+
+
+def uses_response_chaining(provider: str) -> bool:
+    """Whether the provider keeps conversation state server-side.
+
+    OpenAI threads a multi-turn Responses conversation with
+    ``previous_response_id``. OpenRouter's Responses endpoint rejects that
+    field (400 invalid_prompt) because it holds no state, but it does accept
+    the whole conversation replayed in ``input`` -- function_call and
+    function_call_output items included. Callers that honour this flag keep one
+    code path for both.
+    """
     return provider == PROVIDER_OPENAI
+
+
+def resolve_store(provider: str, store: bool) -> bool:
+    """Whether the provider will keep the response.
+
+    OpenRouter stores nothing and rejects ``store=true`` outright
+    (400 invalid_prompt, "expected false"), so the request is sent unstored
+    regardless of what the caller asked for.
+    """
+    return store and uses_response_chaining(provider)
 
 
 def resolve_backend(provider: str, backend: str) -> Tuple[str, Optional[str]]:
@@ -123,6 +146,61 @@ def reasoning_extra_body(
     if not reasoning_effort or reasoning_effort == "none":
         return {}
     return {"reasoning": {"effort": reasoning_effort}}
+
+
+class ResponsesConversation:
+    """Threads a multi-turn Responses conversation for either provider.
+
+    On OpenAI each request sends only what is new and points at the previous
+    response. On OpenRouter there is no server-side state, so the whole
+    conversation -- the model's own function_call items included -- is replayed
+    in ``input`` every turn. Loops drive this the same way for both: read
+    ``create_kwargs()``, then ``record_turn()`` with what came back, then
+    ``extend()`` with the tool outputs to send next.
+    """
+
+    def __init__(self, provider: str, opening: list) -> None:
+        self.chaining = uses_response_chaining(provider)
+        self._convo: list = list(opening)
+        self._pending: list = list(opening)
+        self._previous_response_id: Optional[str] = None
+
+    def create_kwargs(self) -> Dict[str, Any]:
+        if self.chaining:
+            kwargs: Dict[str, Any] = {"input": self._pending}
+            if self._previous_response_id is not None:
+                kwargs["previous_response_id"] = self._previous_response_id
+            return kwargs
+        return {"input": self._convo}
+
+    def record_turn(
+        self,
+        response: Any,
+        calls: list,
+        assistant_text: Optional[str] = None,
+    ) -> None:
+        """Take in the model's output. *calls* are (call_id, name, arguments)."""
+        if self.chaining:
+            self._previous_response_id = getattr(response, "id", None)
+            return
+        if assistant_text and not calls:
+            self._convo.append({"role": "assistant", "content": assistant_text})
+        for call_id, name, arguments in calls:
+            self._convo.append(
+                {
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": name,
+                    "arguments": arguments,
+                }
+            )
+
+    def extend(self, items: list) -> None:
+        """Queue what to send next (tool outputs, or a protocol reminder)."""
+        if self.chaining:
+            self._pending = list(items)
+        else:
+            self._convo.extend(items)
 
 
 def resolve_target(

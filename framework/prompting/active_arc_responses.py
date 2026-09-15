@@ -1,8 +1,10 @@
-"""OpenAI Responses API loop for ActiveARC (recommended multi-turn backend).
+"""Responses API loop for ActiveARC (recommended multi-turn backend).
 
-Uses ``previous_response_id`` to chain tool turns so reasoning and call context
-stay server-side. Stable rules live in a turn-1 ``developer`` input message (persisted
-in the chain); later turns send only new ``function_call_output`` items.
+State is threaded by ResponsesConversation: on OpenAI, ``previous_response_id``
+keeps reasoning and call context server-side and each turn sends only the new
+``function_call_output`` items; on OpenRouter, which holds no state, the whole
+conversation is replayed in ``input``. Stable rules live in a turn-1
+``developer`` message either way.
 """
 
 from __future__ import annotations
@@ -20,9 +22,11 @@ from framework.prompting.active_arc_tools import (
     responses_tools_for_phase,
 )
 from framework.prompting.clients import (
+    ResponsesConversation,
     build_client,
     resolve_model,
     resolve_provider,
+    resolve_store,
     supports_responses_api,
 )
 from framework.prompting.response_logging import summarize_response, usage_totals
@@ -85,6 +89,7 @@ def run_active_arc_responses_loop(
         )
     resolved_model = resolve_model(resolved_provider, model)
     client = build_client(resolved_provider)
+    store = resolve_store(resolved_provider, store)
 
     transcript: List[Dict[str, Any]] = []
     last_result: Dict[str, Any] = {
@@ -98,8 +103,9 @@ def run_active_arc_responses_loop(
         "usage": None,
     }
 
-    previous_response_id: Optional[str] = None
-    pending_input: List[Any] = build_initial_responses_input(session)
+    convo = ResponsesConversation(
+        resolved_provider, build_initial_responses_input(session)
+    )
 
     for turn in range(max_turns):
         create_kwargs: Dict[str, Any] = {
@@ -107,16 +113,13 @@ def run_active_arc_responses_loop(
             "tools": responses_tools_for_phase(
                 session.phase, program_mode=session.program_test
             ),
-            "input": pending_input,
             "store": store,
+            **convo.create_kwargs(),
         }
         if reasoning_effort is not None:
             create_kwargs["reasoning"] = {"effort": reasoning_effort}
-        if previous_response_id is not None:
-            create_kwargs["previous_response_id"] = previous_response_id
 
         response = client.responses.create(**create_kwargs)
-        previous_response_id = response.id
         response_log = summarize_response(response)
 
         function_calls = [
@@ -143,6 +146,11 @@ def run_active_arc_responses_loop(
                 "tool_results": [],
             }
         )
+        convo.record_turn(
+            response,
+            [_function_call_fields(item) for item in function_calls],
+            assistant_text=_assistant_text(response),
+        )
 
         if not function_calls:
             assistant_text = _assistant_text(response)
@@ -154,7 +162,7 @@ def run_active_arc_responses_loop(
                         "result": {"ok": False, "error": reminder},
                     }
                 )
-                pending_input = [{"role": "user", "content": reminder}]
+                convo.extend([{"role": "user", "content": reminder}])
                 continue
             last_result["usage"] = usage_totals(transcript)
             last_result["final"] = {
@@ -164,7 +172,7 @@ def run_active_arc_responses_loop(
             }
             return last_result
 
-        pending_input = []
+        tool_outputs: List[Any] = []
         for item in function_calls:
             call_id, name, arguments = _function_call_fields(item)
             out = execute_tool_call(session, name, arguments)
@@ -190,13 +198,14 @@ def run_active_arc_responses_loop(
                 }
                 return last_result
 
-            pending_input.append(
+            tool_outputs.append(
                 {
                     "type": "function_call_output",
                     "call_id": call_id,
                     "output": json.dumps(out),
                 }
             )
+        convo.extend(tool_outputs)
 
     last_result["usage"] = usage_totals(transcript)
     last_result["final"] = {

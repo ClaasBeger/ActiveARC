@@ -34,6 +34,8 @@ def build_inverse_query_record(
         "model": result.get("model"),
         "teacher_model": result.get("teacher_model"),
         "student_model": result.get("student_model"),
+        "teacher_provider": result.get("teacher_provider"),
+        "student_provider": result.get("student_provider"),
         "reasoning_effort": result.get("reasoning_effort"),
         "exam_n": session.exam_n,
         "n_show_example": session.n_show_example,

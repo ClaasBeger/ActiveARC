@@ -23,6 +23,14 @@ from framework.inverse_query.tools import (
     teacher_tools_for,
 )
 from framework.prompting.active_arc_tools import DEFAULT_OPENAI_MODEL, looks_like_raw_grid
+from framework.prompting.clients import (
+    PROVIDER_OPENAI,
+    ResponsesConversation,
+    build_client,
+    resolve_model,
+    resolve_provider,
+    resolve_store,
+)
 from framework.prompting.response_logging import summarize_response, usage_totals
 
 
@@ -95,6 +103,7 @@ def _run_student_prediction(
     max_turns: int,
     kind: str,
     exam_index: Optional[int],
+    provider: str = PROVIDER_OPENAI,
 ) -> Dict[str, Any]:
     """One student prediction (probe or exam item). Rebuilds context each call."""
     opening: List[Any] = [
@@ -107,7 +116,7 @@ def _run_student_prediction(
         },
     ]
     return _run_prediction(client, opening, model=model, reasoning_effort=reasoning_effort,
-                           store=store, max_turns=max_turns)
+                           store=store, max_turns=max_turns, provider=provider)
 
 
 def _run_teacher_check_item(
@@ -120,6 +129,7 @@ def _run_teacher_check_item(
     reasoning_effort: Optional[str],
     store: bool,
     max_turns: int,
+    provider: str = PROVIDER_OPENAI,
 ) -> Dict[str, Any]:
     """The teacher solves one exam item from its normal briefing, fresh context per item."""
     opening: List[Any] = [
@@ -129,7 +139,8 @@ def _run_teacher_check_item(
     ]
     return _run_prediction(client, opening, model=model, reasoning_effort=reasoning_effort,
                            store=store, max_turns=max_turns,
-                           tools=teacher_check_tools_for(session), session=session)
+                           tools=teacher_check_tools_for(session), session=session,
+                           provider=provider)
 
 
 def _run_prediction(
@@ -142,6 +153,7 @@ def _run_prediction(
     max_turns: int,
     tools: Optional[List[Dict[str, Any]]] = None,
     session: Optional[InverseQuerySession] = None,
+    provider: str = PROVIDER_OPENAI,
 ) -> Dict[str, Any]:
     """Drive one submit_prediction tool loop to a single grid.
 
@@ -149,8 +161,9 @@ def _run_prediction(
     implementation lookup, answered here from *session*.
     """
     tools = tools if tools is not None else STUDENT_TOOLS
+    store = resolve_store(provider, store)
     transcript: List[Dict[str, Any]] = []
-    previous_response_id: Optional[str] = None
+    convo = ResponsesConversation(provider, pending_input)
     prediction: Optional[List[List[int]]] = None
     stop_reason = "max_turns"
 
@@ -158,15 +171,12 @@ def _run_prediction(
         create_kwargs: Dict[str, Any] = {
             "model": model,
             "tools": tools,
-            "input": pending_input,
             "store": store,
+            **convo.create_kwargs(),
         }
         if reasoning_effort is not None:
             create_kwargs["reasoning"] = {"effort": reasoning_effort}
-        if previous_response_id is not None:
-            create_kwargs["previous_response_id"] = previous_response_id
         response = client.responses.create(**create_kwargs)
-        previous_response_id = response.id
         function_calls = [
             item
             for item in (getattr(response, "output", None) or [])
@@ -188,16 +198,21 @@ def _run_prediction(
             "tool_results": [],
         }
         transcript.append(turn_log)
+        convo.record_turn(
+            response,
+            [_function_call_fields(c) for c in function_calls],
+            assistant_text=_assistant_text(response),
+        )
 
         if not function_calls:
             reminder = _student_plain_text_reminder(_assistant_text(response))
             turn_log["tool_results"].append(
                 {"name": "_protocol_reminder", "result": {"ok": False, "error": reminder}}
             )
-            pending_input = [{"role": "user", "content": reminder}]
+            convo.extend([{"role": "user", "content": reminder}])
             continue
 
-        pending_input = []
+        tool_outputs: List[Any] = []
         submitted = False
         for item in function_calls:
             call_id, name, arguments = _function_call_fields(item)
@@ -214,13 +229,14 @@ def _run_prediction(
                 else:
                     out = parsed
             turn_log["tool_results"].append({"name": name, "result": out})
-            pending_input.append(
+            tool_outputs.append(
                 {
                     "type": "function_call_output",
                     "call_id": call_id,
                     "output": json.dumps(out),
                 }
             )
+        convo.extend(tool_outputs)
         if submitted:
             stop_reason = "submitted"
             break
@@ -244,6 +260,9 @@ def run_inverse_query_responses_loop(
     teacher_model: Optional[str] = None,
     student_model: Optional[str] = None,
     teacher_check: bool = False,
+    provider: Optional[str] = None,
+    teacher_provider: Optional[str] = None,
+    student_provider: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Optional teacher sanity check, then teacher loop, then sequential student exam.
 
@@ -251,20 +270,28 @@ def run_inverse_query_responses_loop(
     the exam is drawn first and the teacher must solve every item from its own
     briefing; a trial whose teacher cannot is recorded and stopped before any
     teaching, since a student cannot be taught a rule the teacher cannot apply.
+
+    Teacher and student resolve their provider independently, so a fixed
+    student on one vendor can be taught by teachers from another -- which is
+    the point of holding the student constant across conditions.
     """
-    try:
-        from openai import OpenAI
-    except ImportError as e:
-        raise ImportError("Install the OpenAI SDK: pip install openai") from e
+    resolved_teacher_provider = resolve_provider(
+        teacher_provider or provider, teacher_model or model
+    )
+    resolved_student_provider = resolve_provider(
+        student_provider or provider, student_model or model
+    )
+    resolved_teacher = resolve_model(resolved_teacher_provider, teacher_model or model)
+    resolved_student = resolve_model(resolved_student_provider, student_model or model)
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("Set OPENAI_API_KEY in the environment.")
-
-    resolved_model = model or os.environ.get("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
-    resolved_teacher = teacher_model or resolved_model
-    resolved_student = student_model or resolved_model
-    client = OpenAI(api_key=api_key)
+    teacher_client = build_client(resolved_teacher_provider)
+    student_client = (
+        teacher_client
+        if resolved_student_provider == resolved_teacher_provider
+        else build_client(resolved_student_provider)
+    )
+    # Named for the teacher loop, which is the bulk of the client's use below.
+    client = teacher_client
 
     teacher_transcript: List[Dict[str, Any]] = []
     student_transcript: List[Dict[str, Any]] = []
@@ -275,6 +302,8 @@ def run_inverse_query_responses_loop(
         "model": resolved_teacher,
         "teacher_model": resolved_teacher,
         "student_model": resolved_student,
+        "teacher_provider": resolved_teacher_provider,
+        "student_provider": resolved_student_provider,
         "reasoning_effort": reasoning_effort,
         "teacher_transcript": teacher_transcript,
         "student_transcript": student_transcript,
@@ -299,8 +328,9 @@ def run_inverse_query_responses_loop(
         predictions: List[Optional[List[List[int]]]] = []
         for i, pair in enumerate(session.exam_pairs):
             run = _run_teacher_check_item(
-                client, session, pair.input, exam_index=i + 1, model=resolved_teacher,
-                reasoning_effort=reasoning_effort, store=store, max_turns=student_max_turns,
+                teacher_client, session, pair.input, exam_index=i + 1,
+                model=resolved_teacher, reasoning_effort=reasoning_effort, store=store,
+                max_turns=student_max_turns, provider=resolved_teacher_provider,
             )
             teacher_check_transcript.append({"kind": "teacher_check", "exam_index": i + 1,
                                              "input": pair.input, **run})
@@ -315,11 +345,14 @@ def run_inverse_query_responses_loop(
             last_result["usage"] = _usage()
             return last_result
 
-    previous_response_id: Optional[str] = None
-    pending_input: List[Any] = [
-        {"role": "developer", "content": teacher_developer_prompt(session)},
-        {"role": "user", "content": teacher_task_message(session)},
-    ]
+    teacher_store = resolve_store(resolved_teacher_provider, store)
+    teacher_convo = ResponsesConversation(
+        resolved_teacher_provider,
+        [
+            {"role": "developer", "content": teacher_developer_prompt(session)},
+            {"role": "user", "content": teacher_task_message(session)},
+        ],
+    )
 
     exam_started = False
     teacher_stop_reason = "max_turns"
@@ -330,15 +363,12 @@ def run_inverse_query_responses_loop(
         create_kwargs: Dict[str, Any] = {
             "model": resolved_teacher,
             "tools": teacher_tools_for(session),
-            "input": pending_input,
-            "store": store,
+            "store": teacher_store,
+            **teacher_convo.create_kwargs(),
         }
         if reasoning_effort is not None:
             create_kwargs["reasoning"] = {"effort": reasoning_effort}
-        if previous_response_id is not None:
-            create_kwargs["previous_response_id"] = previous_response_id
-        response = client.responses.create(**create_kwargs)
-        previous_response_id = response.id
+        response = teacher_client.responses.create(**create_kwargs)
         function_calls = [
             item
             for item in (getattr(response, "output", None) or [])
@@ -361,6 +391,11 @@ def run_inverse_query_responses_loop(
             "tool_results": [],
         }
         teacher_transcript.append(turn_log)
+        teacher_convo.record_turn(
+            response,
+            [_function_call_fields(c) for c in function_calls],
+            assistant_text=_assistant_text(response),
+        )
 
         if not function_calls:
             # Prose, or a reasoning-only turn with no message at all: neither is
@@ -373,17 +408,17 @@ def run_inverse_query_responses_loop(
             turn_log["tool_results"].append(
                 {"name": "_protocol_reminder", "result": {"ok": False, "error": reminder}}
             )
-            pending_input = [{"role": "user", "content": reminder}]
+            teacher_convo.extend([{"role": "user", "content": reminder}])
             continue
 
-        pending_input = []
+        tool_outputs: List[Any] = []
         for item in function_calls:
             call_id, name, arguments = _function_call_fields(item)
             out = execute_teacher_tool(session, name, arguments)
 
             if out.get("delegate") == "query_student":
                 student_run = _run_student_prediction(
-                    client,
+                    student_client,
                     session,
                     out["input"],
                     model=resolved_student,
@@ -392,6 +427,7 @@ def run_inverse_query_responses_loop(
                     max_turns=student_max_turns,
                     kind="probe",
                     exam_index=None,
+                    provider=resolved_student_provider,
                 )
                 student_transcript.append(
                     {
@@ -408,7 +444,7 @@ def run_inverse_query_responses_loop(
 
             if name == "start_exam" and out.get("ok"):
                 exam_started = True
-                pending_input.append(
+                tool_outputs.append(
                     {
                         "type": "function_call_output",
                         "call_id": call_id,
@@ -419,13 +455,14 @@ def run_inverse_query_responses_loop(
                 )
                 break
 
-            pending_input.append(
+            tool_outputs.append(
                 {
                     "type": "function_call_output",
                     "call_id": call_id,
                     "output": json.dumps(out),
                 }
             )
+        teacher_convo.extend(tool_outputs)
         if exam_started:
             break
 
@@ -446,7 +483,7 @@ def run_inverse_query_responses_loop(
         if exam_input is None:
             break
         student_run = _run_student_prediction(
-            client,
+            student_client,
             session,
             exam_input,
             model=resolved_student,
@@ -455,6 +492,7 @@ def run_inverse_query_responses_loop(
             max_turns=student_max_turns,
             kind="exam",
             exam_index=i + 1,
+            provider=resolved_student_provider,
         )
         student_transcript.append(
             {

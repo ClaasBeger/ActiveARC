@@ -28,7 +28,8 @@ if str(ROOT_DIR) not in sys.path:
 
 from framework.active_arc.program_eval import DEFAULT_DYNAMIC_N, evaluate_program
 
-SKIP_FILES = {"manifest.json", "summary.json", "program_scores.json"}
+SKIP_FILES = {"manifest.json", "summary.json", "summary.jsonl", "program_scores.json",
+              "oracle_recheck.json", "oracle_recheck_canon.json", "INVALID.json"}
 
 
 def _parse_args() -> argparse.Namespace:
@@ -204,9 +205,20 @@ def main() -> None:
                 rec = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
                 rec = {}
-            if ((rec.get("trial") or {}).get("program_eval")):
-                rows.append({"task_id": rec.get("task_id", path.stem), "skipped": True,
-                             "correct": rec.get("correct")})
+            pe = (rec.get("trial") or {}).get("program_eval")
+            if pe:
+                # Carry the stored evaluation into the summary in the same shape as
+                # a fresh one, so a resume pass still describes the whole directory.
+                rows.append({
+                    "task_id": rec.get("task_id", path.stem),
+                    "skipped": True,
+                    "correct": pe.get("all_correct"),
+                    "loaded": pe.get("loaded"),
+                    "accuracy": pe.get("accuracy"),
+                    "n_total": pe.get("n_total"),
+                    "query_count": rec.get("query_count"),
+                    "sets": {k: [v["n_correct"], v["n"]] for k, v in (pe.get("sets") or {}).items()},
+                })
                 continue
         todo.append((str(path), args.dynamic_n, args.call_timeout_s, args.seed, args.guard))
 
@@ -260,7 +272,7 @@ def main() -> None:
         for i, payload in enumerate(todo, 1):
             _emit(i, _score_one(payload))
 
-    scored = [r for r in rows if "correct" in r and not r.get("skipped")]
+    scored = [r for r in rows if "sets" in r]          # fresh this pass or carried over
     n_correct = sum(1 for r in scored if r.get("correct"))
     n_loaded = sum(1 for r in scored if r.get("loaded"))
     summary = {
@@ -271,6 +283,7 @@ def main() -> None:
         "seed": args.seed,
         "n_records": len(paths),
         "n_scored": len(scored),
+        "n_scored_this_pass": sum(1 for r in scored if not r.get("skipped")),
         "n_loaded": n_loaded,
         "n_correct": n_correct,
         "elapsed_s": round(time.perf_counter() - t0, 3),

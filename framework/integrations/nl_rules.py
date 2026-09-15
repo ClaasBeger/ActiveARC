@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 _ACTIVEARC_ROOT = Path(__file__).resolve().parents[2]
 NL_RULES_DIR = _ACTIVEARC_ROOT / "external" / "nl_rules"
@@ -50,3 +50,34 @@ def marc2_rule(task_id: str) -> Optional[str]:
     """MARC2 language-complete NL rule for an ARC-AGI-2 training task, if any."""
     text = _load_rules(str(MARC2_PATH)).get(_normalize_task_id(task_id))
     return text or None
+
+
+COLLECTED_PATH = NL_RULES_DIR / "collected_rules.json"
+_COLLECTED_KEY = {"arc": "arc_agi_1", "arc2": "arc_agi_2", "parc": "parc", "conceptarc": "conceptarc"}
+
+
+def collected_rule(task_id: str, dataset: str) -> Optional[Tuple[str, str]]:
+    """``(rule, source)`` from the aggregate the annotation pipeline writes.
+
+    The aggregate holds the published lookups *and* the hand-written drafts that
+    close their gaps, each tagged with where it came from ("larc", "marc2",
+    "draft", ...). Falls back to the published lookup alone when the aggregate is
+    absent, so a checkout without it still gets what it had before.
+    """
+    tid = _normalize_task_id(task_id)
+    key = _COLLECTED_KEY.get(dataset)
+    if key and COLLECTED_PATH.is_file():
+        try:
+            block = json.loads(COLLECTED_PATH.read_text(encoding="utf-8")).get(key) or {}
+        except Exception:
+            block = {}
+        entry = block.get(tid)
+        if isinstance(entry, dict) and str(entry.get("rule") or "").strip():
+            return str(entry["rule"]).strip(), str(entry.get("source") or "collected")
+    if dataset == "arc":
+        rule = larc_rule(tid)
+        return (rule, "larc") if rule else None
+    if dataset == "arc2":
+        rule = marc2_rule(tid)
+        return (rule, "marc2") if rule else None
+    return None
