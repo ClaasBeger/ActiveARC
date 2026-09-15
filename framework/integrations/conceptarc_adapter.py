@@ -38,7 +38,11 @@ from typing import Any, Callable, Dict, List, Optional
 from framework.grids import Grid, GridPair
 from framework.tasks.base import ArcTask
 
-_ACTIVEARC_ROOT = Path(__file__).resolve().parents[2]
+from framework.repo_paths import ACTIVEARC_ROOT as _REPO_ROOT
+
+# Resolved via framework.repo_paths so a git worktree still finds the sibling
+# checkouts next to the main repository rather than next to itself.
+_ACTIVEARC_ROOT = _REPO_ROOT
 PROGRAMS_DIR = _ACTIVEARC_ROOT / "external" / "conceptarc" / "programs"
 RULES_CSV = PROGRAMS_DIR.parent / "ConceptARC_rules.csv"
 _SAMPLE_TRAIN = 3

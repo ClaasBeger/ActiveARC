@@ -30,7 +30,11 @@ from typing import Callable, Iterator, List, Optional
 from framework.grids import Grid, GridPair
 from framework.tasks.base import ArcTask
 
-_ACTIVEARC_ROOT = Path(__file__).resolve().parents[2]
+from framework.repo_paths import ACTIVEARC_ROOT as _REPO_ROOT
+
+# Resolved via framework.repo_paths so a git worktree still finds the sibling
+# checkouts next to the main repository rather than next to itself.
+_ACTIVEARC_ROOT = _REPO_ROOT
 
 _TASK_DIR_CACHE: dict[int, Path] | None = None
 _VERIFIER_CACHE: dict[int, Callable[[Grid], Grid]] = {}
