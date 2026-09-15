@@ -30,7 +30,8 @@ from framework.active_arc.headless_trial import create_trial_session
 from framework.active_arc.trial_record import build_trial_record
 from framework.prompting.active_arc_openai import run_openai_agent_loop
 from framework.prompting.active_arc_responses import run_active_arc_responses_loop
-from framework.prompting.active_arc_tools import DEFAULT_OPENAI_MODEL
+from framework.prompting.active_arc_tools import DEFAULT_OPENAI_MODEL  # noqa: F401
+from framework.prompting.clients import PROVIDERS, resolve_target
 from framework.tasks.arc_dataset import list_arc_agi_1_task_ids
 
 
@@ -59,6 +60,14 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out-dir", type=str, required=True)
     p.add_argument("--backend", choices=["responses", "chat"], default="responses")
+    p.add_argument(
+        "--provider",
+        choices=list(PROVIDERS),
+        default=None,
+        help="Model provider. Default: inferred from --model (a 'vendor/model' id "
+        "means openrouter), else ACTIVEARC_PROVIDER, else openai. OpenRouter has "
+        "no Responses API, so it forces --backend chat.",
+    )
     p.add_argument("--model", type=str, default=None)
     p.add_argument("--max-turns", type=int, default=64)
     p.add_argument("--temperature", type=float, default=0.2)
@@ -194,6 +203,7 @@ def _run_one(args: argparse.Namespace, task_id: str) -> dict:
             model=args.model,
             max_turns=args.max_turns,
             reasoning_effort=reasoning_effort,
+            provider=args.provider,
         )
     else:
         result = run_openai_agent_loop(
@@ -201,6 +211,8 @@ def _run_one(args: argparse.Namespace, task_id: str) -> dict:
             model=args.model,
             max_turns=args.max_turns,
             temperature=args.temperature,
+            provider=args.provider,
+            reasoning_effort=reasoning_effort,
         )
     return build_trial_record(
         session,
@@ -222,11 +234,22 @@ def main() -> None:
     if not task_ids:
         raise SystemExit("No task ids selected.")
 
+    # Resolve once so every trial, and the manifest, record what actually ran.
+    target = resolve_target(
+        provider=args.provider, model=args.model, backend=args.backend
+    )
+    args.provider = target["provider"]
+    args.model = target["model"]
+    args.backend = target["backend"]
+    if target["backend_note"]:
+        print(f"[provider] {target['backend_note']}")
+
     manifest = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "dataset": args.dataset,
         "backend": args.backend,
-        "model": args.model or DEFAULT_OPENAI_MODEL,
+        "provider": args.provider,
+        "model": args.model,
         "reasoning_effort": args.reasoning_effort,
         "seed": args.seed,
         "offset": args.offset,
@@ -339,6 +362,15 @@ def main() -> None:
                 "total_tokens",
             )
         },
+        # Billed cost, present only for providers that report it (OpenRouter).
+        "total_cost": round(
+            sum(
+                (r.get("usage") or {}).get("cost", 0.0)
+                for r in rows
+                if isinstance(r.get("usage"), dict)
+            ),
+            6,
+        ),
         "rows": rows,
     }
     (out_dir / "summary.json").write_text(json.dumps(finished, indent=2), encoding="utf-8")

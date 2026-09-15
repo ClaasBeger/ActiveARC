@@ -94,13 +94,15 @@ def summarize_response(response: Any) -> Dict[str, Any]:
 
 
 def usage_totals(turns: List[Dict[str, Any]]) -> Dict[str, int]:
-    totals = {
+    totals: Dict[str, Any] = {
         "input_tokens": 0,
         "cached_input_tokens": 0,
         "output_tokens": 0,
         "reasoning_tokens": 0,
         "total_tokens": 0,
     }
+    cost = 0.0
+    saw_cost = False
     for turn in turns:
         response = turn.get("response") or {}
         usage = response.get("usage") if isinstance(response, dict) else None
@@ -119,4 +121,44 @@ def usage_totals(turns: List[Dict[str, Any]]) -> Dict[str, int]:
             totals["cached_input_tokens"] += int(in_det.get("cached_tokens") or 0)
         if isinstance(out_det, dict):
             totals["reasoning_tokens"] += int(out_det.get("reasoning_tokens") or 0)
+        if usage.get("cost") is not None:
+            cost += float(usage.get("cost") or 0.0)
+            saw_cost = True
+    if saw_cost:
+        totals["cost"] = round(cost, 6)
     return totals
+
+
+def chat_usage_to_responses_shape(usage: Any) -> Optional[Dict[str, Any]]:
+    """Rename Chat Completions usage fields to the Responses API's spelling.
+
+    ``usage_totals`` reads Responses-shaped keys. Chat Completions (and so every
+    model reached through OpenRouter) reports ``prompt_tokens`` /
+    ``completion_tokens`` instead, which would otherwise total to zero and make
+    non-OpenAI runs look free.
+    """
+    if usage is None:
+        return None
+    if not isinstance(usage, dict):
+        usage = _to_plain(usage)
+    if not isinstance(usage, dict):
+        return None
+    prompt_details = usage.get("prompt_tokens_details") or {}
+    completion_details = usage.get("completion_tokens_details") or {}
+    shaped: Dict[str, Any] = {
+        "input_tokens": usage.get("prompt_tokens") or 0,
+        "output_tokens": usage.get("completion_tokens") or 0,
+        "total_tokens": usage.get("total_tokens") or 0,
+    }
+    if isinstance(prompt_details, dict):
+        shaped["input_tokens_details"] = {
+            "cached_tokens": prompt_details.get("cached_tokens") or 0
+        }
+    if isinstance(completion_details, dict):
+        shaped["output_tokens_details"] = {
+            "reasoning_tokens": completion_details.get("reasoning_tokens") or 0
+        }
+    # OpenRouter reports billed cost per call; keep it for compute reporting.
+    if usage.get("cost") is not None:
+        shaped["cost"] = usage.get("cost")
+    return shaped

@@ -28,6 +28,7 @@ from framework.active_arc.trial_record import build_trial_record
 from framework.prompting.active_arc_openai import run_openai_agent_loop
 from framework.prompting.active_arc_responses import run_active_arc_responses_loop
 from framework.prompting.active_arc_tools import DEFAULT_OPENAI_MODEL
+from framework.prompting.clients import PROVIDERS, resolve_target
 
 
 def _parse_args() -> argparse.Namespace:
@@ -57,10 +58,19 @@ def _parse_args() -> argparse.Namespace:
         help="OpenAI API backend (default: responses — recommended for multi-turn tool loops).",
     )
     p.add_argument(
+        "--provider",
+        choices=list(PROVIDERS),
+        default=None,
+        help="Model provider. Default: inferred from --model (a 'vendor/model' id "
+        "means openrouter), else ACTIVEARC_PROVIDER, else openai. OpenRouter has "
+        "no Responses API, so it forces the chat backend.",
+    )
+    p.add_argument(
         "--model",
         type=str,
         default=None,
-        help=f"OpenAI model name (default: env OPENAI_MODEL or {DEFAULT_OPENAI_MODEL}).",
+        help=f"Model name (default: env OPENAI_MODEL or {DEFAULT_OPENAI_MODEL}). "
+        "An OpenRouter id looks like anthropic/claude-sonnet-4.5.",
     )
     p.add_argument("--max-turns", type=int, default=64)
     p.add_argument("--temperature", type=float, default=0.2, help="Chat backend only.")
@@ -129,19 +139,27 @@ def main() -> None:
         defer_program_eval=args.defer_program_eval,
     )
     reasoning_effort = None if args.reasoning_effort.lower() == "none" else args.reasoning_effort
-    if args.backend == "responses":
+    target = resolve_target(
+        provider=args.provider, model=args.model, backend=args.backend
+    )
+    if target["backend_note"]:
+        print(f"[provider] {target['backend_note']}", file=sys.stderr)
+    if target["backend"] == "responses":
         result = run_active_arc_responses_loop(
             session,
-            model=args.model,
+            model=target["model"],
             max_turns=args.max_turns,
             reasoning_effort=reasoning_effort,
+            provider=target["provider"],
         )
     else:
         result = run_openai_agent_loop(
             session,
-            model=args.model,
+            model=target["model"],
             max_turns=args.max_turns,
             temperature=args.temperature,
+            provider=target["provider"],
+            reasoning_effort=reasoning_effort,
         )
     out = build_trial_record(
         session,

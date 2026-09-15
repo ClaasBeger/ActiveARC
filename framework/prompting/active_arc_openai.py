@@ -1,20 +1,32 @@
-"""OpenAI Chat Completions loop with ActiveARC tools (legacy backend)."""
+"""Chat Completions loop with ActiveARC tools.
+
+Also the OpenRouter path: OpenRouter speaks Chat Completions but not the
+Responses API, so Anthropic and Google models run this loop.
+"""
 
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Dict, List, Optional
 
 from framework.active_arc.headless_trial import ActiveArcTrialSession
 from framework.prompting.active_arc_tools import (
-    DEFAULT_OPENAI_MODEL,
     OPENAI_CHAT_TOOL_DEFINITIONS,
     _system_prompt,
     build_task_user_message,
     chat_tools_for_phase,
     execute_tool_call,
     plain_text_protocol_reminder,
+)
+from framework.prompting.clients import (
+    build_client,
+    reasoning_extra_body,
+    resolve_model,
+    resolve_provider,
+)
+from framework.prompting.response_logging import (
+    chat_usage_to_responses_shape,
+    usage_totals,
 )
 
 # Backward-compatible re-exports
@@ -27,20 +39,15 @@ def run_openai_agent_loop(
     model: Optional[str] = None,
     max_turns: int = 64,
     temperature: float = 0.2,
+    provider: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Run OpenAI Chat Completions tool loop until done, stop, or max_turns."""
-    try:
-        from openai import OpenAI
-    except ImportError as e:
-        raise ImportError("Install the OpenAI SDK: pip install openai") from e
+    """Run a Chat Completions tool loop until done, stop, or max_turns."""
+    resolved_provider = resolve_provider(provider, model)
+    resolved_model = resolve_model(resolved_provider, model)
+    client = build_client(resolved_provider)
+    extra_body = reasoning_extra_body(resolved_provider, reasoning_effort)
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("Set OPENAI_API_KEY in the environment.")
-
-    resolved_model = model or os.environ.get("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
-
-    client = OpenAI(api_key=api_key)
     messages: List[Dict[str, Any]] = [
         {"role": "system", "content": _system_prompt(session)},
         {"role": "user", "content": build_task_user_message(session)},
@@ -51,18 +58,31 @@ def run_openai_agent_loop(
         "session": session,
         "transcript": transcript,
         "backend": "chat",
+        "provider": resolved_provider,
         "model": resolved_model,
+        "reasoning_effort": reasoning_effort,
         "final": None,
+        "usage": None,
     }
 
+    def _finish(final: Dict[str, Any]) -> Dict[str, Any]:
+        last_result["final"] = final
+        last_result["usage"] = usage_totals(transcript)
+        return last_result
+
     for turn in range(max_turns):
-        response = client.chat.completions.create(
-            model=resolved_model,
-            messages=messages,
-            tools=chat_tools_for_phase(session.phase, program_mode=session.program_test),
-            tool_choice="auto",
-            temperature=temperature,
-        )
+        create_kwargs: Dict[str, Any] = {
+            "model": resolved_model,
+            "messages": messages,
+            "tools": chat_tools_for_phase(
+                session.phase, program_mode=session.program_test
+            ),
+            "tool_choice": "auto",
+            "temperature": temperature,
+        }
+        if extra_body:
+            create_kwargs["extra_body"] = extra_body
+        response = client.chat.completions.create(**create_kwargs)
         choice = response.choices[0]
         msg = choice.message
         tool_calls_meta = [
@@ -79,6 +99,9 @@ def run_openai_agent_loop(
                 "assistant": msg.content,
                 "tool_calls": tool_calls_meta,
                 "tool_results": [],
+                "usage": chat_usage_to_responses_shape(
+                    getattr(response, "usage", None)
+                ),
             }
         )
 
@@ -111,12 +134,13 @@ def run_openai_agent_loop(
                 )
                 messages.append({"role": "user", "content": reminder})
                 continue
-            last_result["final"] = {
-                "reason": "model_stop",
-                "message": msg.content,
-                "phase": session.phase,
-            }
-            return last_result
+            return _finish(
+                {
+                    "reason": "model_stop",
+                    "message": msg.content,
+                    "phase": session.phase,
+                }
+            )
 
         for tc in msg.tool_calls:
             name = tc.function.name
@@ -124,22 +148,24 @@ def run_openai_agent_loop(
             transcript[-1]["tool_results"].append({"name": name, "result": out})
 
             if out.get("sampler_exhausted"):
-                last_result["final"] = {
-                    "reason": "sampler_exhausted",
-                    "message": out.get("message"),
-                    "phase": out.get("phase", session.phase),
-                    "query_count": session.query_count,
-                }
-                return last_result
+                return _finish(
+                    {
+                        "reason": "sampler_exhausted",
+                        "message": out.get("message"),
+                        "phase": out.get("phase", session.phase),
+                        "query_count": session.query_count,
+                    }
+                )
 
             if name in ("submit_final_answer", "submit_program") and out.get("ok") and out.get("done"):
-                last_result["final"] = {
-                    "reason": "trial_complete",
-                    "result": out,
-                    "query_count": session.query_count,
-                    "correct": out.get("correct"),
-                }
-                return last_result
+                return _finish(
+                    {
+                        "reason": "trial_complete",
+                        "result": out,
+                        "query_count": session.query_count,
+                        "correct": out.get("correct"),
+                    }
+                )
 
             messages.append(
                 {
@@ -149,9 +175,10 @@ def run_openai_agent_loop(
                 }
             )
 
-    last_result["final"] = {
-        "reason": "max_turns",
-        "phase": session.phase,
-        "query_count": session.query_count,
-    }
-    return last_result
+    return _finish(
+        {
+            "reason": "max_turns",
+            "phase": session.phase,
+            "query_count": session.query_count,
+        }
+    )

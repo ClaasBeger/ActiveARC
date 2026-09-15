@@ -13,11 +13,17 @@ from typing import Any, Dict, List, Optional
 
 from framework.active_arc.headless_trial import ActiveArcTrialSession
 from framework.prompting.active_arc_tools import (
-    DEFAULT_OPENAI_MODEL,
+    DEFAULT_OPENAI_MODEL,  # noqa: F401  (re-exported for callers)
     build_initial_responses_input,
     execute_tool_call,
     plain_text_protocol_reminder,
     responses_tools_for_phase,
+)
+from framework.prompting.clients import (
+    build_client,
+    resolve_model,
+    resolve_provider,
+    supports_responses_api,
 )
 from framework.prompting.response_logging import summarize_response, usage_totals
 
@@ -68,25 +74,24 @@ def run_active_arc_responses_loop(
     max_turns: int = 64,
     reasoning_effort: Optional[str] = "low",
     store: bool = True,
+    provider: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run an ActiveARC trial via the OpenAI Responses API + custom function tools."""
-    try:
-        from openai import OpenAI
-    except ImportError as e:
-        raise ImportError("Install the OpenAI SDK: pip install openai") from e
-
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("Set OPENAI_API_KEY in the environment.")
-
-    resolved_model = model or os.environ.get("OPENAI_MODEL", DEFAULT_OPENAI_MODEL)
-    client = OpenAI(api_key=api_key)
+    resolved_provider = resolve_provider(provider, model)
+    if not supports_responses_api(resolved_provider):
+        raise RuntimeError(
+            f"Provider {resolved_provider!r} does not implement the Responses API; "
+            "run this model with --backend chat."
+        )
+    resolved_model = resolve_model(resolved_provider, model)
+    client = build_client(resolved_provider)
 
     transcript: List[Dict[str, Any]] = []
     last_result: Dict[str, Any] = {
         "session": session,
         "transcript": transcript,
         "backend": "responses",
+        "provider": resolved_provider,
         "model": resolved_model,
         "reasoning_effort": reasoning_effort,
         "final": None,
