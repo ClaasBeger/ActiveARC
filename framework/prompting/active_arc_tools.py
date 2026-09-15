@@ -195,11 +195,29 @@ def _system_prompt(session: ActiveArcTrialSession) -> str:
             "(2) if you are confident you know the rule, you may ask for a test, in "
             "which you will be given a new input grid, and you will need to apply "
             "the rule to generate the correct output grid."
+        )
+        if session.forced_queries is None
+        else (
+            "You have a fixed budget of exactly "
+            f"{session.forced_queries} quer{'y' if session.forced_queries == 1 else 'ies'}: "
+            "each one asks for another input-output grid pair that follows the same "
+            "rule, for an input grid you choose. You will take the test after you have "
+            "used the budget, not before, and "
+            + (
+                "you will then submit a Python program implementing the rule."
+                if session.program_test
+                else "you will then be given new input grid(s) to apply the rule to."
+            )
         ),
         "",
         "- You can use the submit_query tool to ask for an input grid. Once you "
         "are confident you know the rule, you can use the request_test tool to "
-        "request the final test.",
+        "request the final test."
+        if session.forced_queries is None
+        else "- Use the submit_query tool to ask for an input grid. After the "
+        f"{session.forced_queries}"
+        f" quer{'y' if session.forced_queries == 1 else 'ies'} "
+        "are used, call request_test for the final test; it is refused before then.",
     ]
     if session.program_test:
         lines.extend(
@@ -229,6 +247,11 @@ def _system_prompt(session: ActiveArcTrialSession) -> str:
             "- Your performance will be scored based on the number of queries you "
             "submit and whether you generate a correct output grid when you are given "
             "a test."
+            if session.forced_queries is None
+            else "- The budget is fixed, so queries cost you nothing and there is no "
+            "credit for using fewer. You are scored only on whether your test output "
+            "grid is correct, so spend every query on whatever would tell you most "
+            "about the rule."
         )
     penalty = session.announced_wrong_answer_penalty()
     if penalty > 0:
