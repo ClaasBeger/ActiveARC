@@ -28,6 +28,7 @@ from framework.active_arc.trial_record import build_trial_record
 from framework.prompting.active_arc_openai import run_openai_agent_loop
 from framework.prompting.active_arc_responses import run_active_arc_responses_loop
 from framework.prompting.active_arc_tools import DEFAULT_OPENAI_MODEL
+from framework.prompting.clients import PROVIDERS, resolve_target
 from framework.slippage.trial import (
     canonical_narrow_slots,
     create_slippage_trial_session,
@@ -49,6 +50,12 @@ def _parse_args() -> argparse.Namespace:
         help="Slippage pairs JSON (default: experiments/slippage/slippage_pairs.json).",
     )
     p.add_argument("--backend", choices=["responses", "chat"], default="responses")
+    p.add_argument(
+        "--provider",
+        choices=list(PROVIDERS),
+        default=None,
+        help="Model provider; default inferred from --model, else openai.",
+    )
     p.add_argument("--model", type=str, default=None)
     p.add_argument("--max-turns", type=int, default=64)
     p.add_argument("--temperature", type=float, default=0.2)
@@ -83,6 +90,7 @@ def _run_one(args: argparse.Namespace, task_id: str) -> dict:
             model=args.model,
             max_turns=args.max_turns,
             reasoning_effort=reasoning_effort,
+            provider=args.provider,
         )
     else:
         result = run_openai_agent_loop(
@@ -90,6 +98,8 @@ def _run_one(args: argparse.Namespace, task_id: str) -> dict:
             model=args.model,
             max_turns=args.max_turns,
             temperature=args.temperature,
+            provider=args.provider,
+            reasoning_effort=reasoning_effort,
         )
     record = build_trial_record(
         session,
@@ -128,12 +138,22 @@ def main() -> None:
     pairs_path = Path(args.pairs) if args.pairs else None
     narrow_by_task = canonical_narrow_slots(pairs_path)
 
+    target = resolve_target(
+        provider=args.provider, model=args.model, backend=args.backend
+    )
+    args.provider = target["provider"]
+    args.model = target["model"]
+    args.backend = target["backend"]
+    if target["backend_note"]:
+        print(f"[provider] {target['backend_note']}")
+
     manifest = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "setting": "slippage",
         "dataset": "arc",
         "backend": args.backend,
-        "model": args.model or DEFAULT_OPENAI_MODEL,
+        "provider": args.provider,
+        "model": args.model,
         "reasoning_effort": args.reasoning_effort,
         "seed": args.seed,
         "offset": args.offset,

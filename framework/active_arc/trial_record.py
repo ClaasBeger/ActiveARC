@@ -36,6 +36,7 @@ def build_trial_record(
         "seed": session.seed,
         "dataset": dataset,
         "backend": result.get("backend"),
+        "provider": result.get("provider"),
         "model": result.get("model"),
         "reasoning_effort": result.get("reasoning_effort"),
         "flags": {
