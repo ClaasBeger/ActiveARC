@@ -34,6 +34,15 @@ from framework.grids import is_equal_grid  # noqa: E402
 from framework.inverse_query.prompts import _dumps  # noqa: E402
 from framework.inverse_query.tools import STUDENT_TOOLS, parse_student_prediction  # noqa: E402
 from framework.prompting.active_arc_tools import DEFAULT_OPENAI_MODEL  # noqa: E402
+from framework.prompting.clients import (  # noqa: E402
+    PROVIDER_OPENAI,
+    PROVIDERS,
+    ResponsesConversation,
+    build_client,
+    resolve_model,
+    resolve_provider,
+    resolve_store,
+)
 from framework.prompting.response_logging import summarize_response, usage_totals  # noqa: E402
 from pipelines.run_active_arc_batch import _output_basename, _task_ids  # noqa: E402
 
@@ -97,30 +106,31 @@ def _assistant_text(response: Any) -> Optional[str]:
 
 
 def predict(client, train_pairs, test_input, *, test_index: int, n_tests: int, model: str,
-            reasoning_effort: Optional[str], max_turns: int, store: bool) -> Dict[str, Any]:
+            reasoning_effort: Optional[str], max_turns: int, store: bool,
+            provider: str = PROVIDER_OPENAI) -> Dict[str, Any]:
     """One submit_prediction loop. Tool-less turns are nudged; the budget is the only stop."""
     transcript: List[Dict[str, Any]] = []
-    pending: List[Any] = [
+    convo = ResponsesConversation(provider, [
         {"role": "developer", "content": developer_prompt()},
         {"role": "user", "content": task_message(train_pairs, test_input, test_index, n_tests)},
-    ]
-    previous_id: Optional[str] = None
+    ])
+    store = resolve_store(provider, store)
     prediction: Optional[List[List[int]]] = None
     reason = "max_turns"
     for turn in range(max_turns):
-        kwargs: Dict[str, Any] = {"model": model, "tools": STUDENT_TOOLS, "input": pending, "store": store}
+        kwargs: Dict[str, Any] = {"model": model, "tools": STUDENT_TOOLS, "store": store,
+                                  **convo.create_kwargs()}
         if reasoning_effort is not None:
             kwargs["reasoning"] = {"effort": reasoning_effort}
-        if previous_id is not None:
-            kwargs["previous_response_id"] = previous_id
         response = client.responses.create(**kwargs)
-        previous_id = response.id
         calls = [it for it in (getattr(response, "output", None) or []) if _output_item_type(it) == "function_call"]
         log = {"turn": turn, "response_id": response.id, "response": summarize_response(response),
                "assistant": _assistant_text(response),
                "tool_calls": [dict(zip(("call_id", "name", "arguments"), _function_call_fields(c))) for c in calls],
                "tool_results": []}
         transcript.append(log)
+        convo.record_turn(response, [_function_call_fields(c) for c in calls],
+                          assistant_text=_assistant_text(response))
         if not calls:
             reminder = ("No prediction was submitted. Call submit_prediction with "
                         '{"grid": [[...], ...]} for test_input.')
@@ -154,7 +164,8 @@ def run_one(client, args, task_id: str) -> Dict[str, Any]:
     turns: List[Dict[str, Any]] = []
     for i, (tin, tout) in enumerate(tests):
         res = predict(client, task.train_pairs, tin, test_index=i, n_tests=len(tests), model=args.model,
-                      reasoning_effort=args.reasoning_effort, max_turns=args.max_turns, store=not args.no_store)
+                      reasoning_effort=args.reasoning_effort, max_turns=args.max_turns,
+                      store=not args.no_store, provider=args.provider)
         pred = res["prediction"]
         items.append({"index": i, "input": tin, "gold_output": tout, "prediction": pred,
                       "correct": pred is not None and is_equal_grid(pred, tout), "reason": res["reason"],
@@ -182,6 +193,8 @@ def main() -> None:
     p.add_argument("--task-id", action="append", dest="task_ids", default=None)
     p.add_argument("--out-dir", type=str, required=True)
     p.add_argument("--model", type=str, default=None)
+    p.add_argument("--provider", choices=list(PROVIDERS), default=None,
+                   help="Default: inferred from --model, else openai.")
     p.add_argument("--reasoning-effort", type=str, default="low")
     p.add_argument("--max-turns", type=int, default=8)
     p.add_argument("--no-store", action="store_true")
@@ -200,15 +213,14 @@ def main() -> None:
         print(json.dumps({"dataset": args.dataset, "n": len(task_ids), "task_ids": task_ids}, indent=1))
         return
 
-    from openai import OpenAI
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise SystemExit("Set OPENAI_API_KEY in the environment.")
-    client = OpenAI(api_key=api_key)
+    args.provider = resolve_provider(args.provider, args.model)
+    args.model = resolve_model(args.provider, args.model)
+    client = build_client(args.provider)
 
     out_dir = Path(args.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     manifest = {"started_at": datetime.now(timezone.utc).isoformat(), "setting": "static", "dataset": args.dataset,
-                "model": args.model, "reasoning_effort": args.reasoning_effort, "max_turns": args.max_turns,
+                "model": args.model, "provider": args.provider,
+                "reasoning_effort": args.reasoning_effort, "max_turns": args.max_turns,
                 "offset": args.offset, "limit": args.limit, "per_concept_limit": args.per_concept_limit,
                 "task_ids": task_ids}
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
