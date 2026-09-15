@@ -148,6 +148,43 @@ def reasoning_extra_body(
     return {"reasoning": {"effort": reasoning_effort}}
 
 
+def _item_dict(item: Any) -> Dict[str, Any]:
+    if isinstance(item, dict):
+        return item
+    if hasattr(item, "model_dump"):
+        try:
+            return item.model_dump()
+        except Exception:  # pragma: no cover - defensive
+            pass
+    return {}
+
+
+def _item_type(item: Any) -> str:
+    if isinstance(item, dict):
+        return str(item.get("type", ""))
+    return str(getattr(item, "type", ""))
+
+
+# Carried back verbatim; ``status`` is output-only and the request schema rejects it.
+_REASONING_REPLAY_FIELDS = (
+    "type", "id", "summary", "content", "encrypted_content", "signature", "format",
+)
+
+
+def _replayable_reasoning(item: Any) -> Optional[Dict[str, Any]]:
+    """A reasoning item stripped to the fields the request schema accepts.
+
+    Anthropic returns the thinking as ``content`` plus a ``signature``; Gemini
+    and OpenAI return ``encrypted_content``. Either way it is opaque to us and
+    is passed straight back so the next turn continues the same reasoning.
+    """
+    d = _item_dict(item)
+    if not d:
+        return None
+    out = {k: d[k] for k in _REASONING_REPLAY_FIELDS if d.get(k) is not None}
+    return out or None
+
+
 class ResponsesConversation:
     """Threads a multi-turn Responses conversation for either provider.
 
@@ -159,11 +196,32 @@ class ResponsesConversation:
     ``extend()`` with the tool outputs to send next.
     """
 
+    # Gemini rejects a replayed conversation carrying reasoning from several
+    # turns at once ("Corrupted thought signature"): its thought signatures go
+    # stale behind the newest one. Keeping a window of the most recent reasoning
+    # item preserves turn-to-turn continuity without accumulating dead
+    # signatures. None means keep every one, which the other providers accept.
+    _REASONING_WINDOW = {PROVIDER_OPENROUTER: 1}
+
     def __init__(self, provider: str, opening: list) -> None:
         self.chaining = uses_response_chaining(provider)
         self._convo: list = list(opening)
         self._pending: list = list(opening)
         self._previous_response_id: Optional[str] = None
+        self._reasoning_window = self._REASONING_WINDOW.get(provider)
+        override = os.environ.get("ACTIVEARC_REASONING_WINDOW")
+        if override:
+            low = override.strip().lower()
+            self._reasoning_window = (
+                None if low == "all" else 0 if low == "none" else int(low)
+            )
+
+    def _trim_reasoning(self, keep: int) -> None:
+        """Drop all but the newest *keep* reasoning items already in the replay."""
+        idx = [i for i, it in enumerate(self._convo)
+               if isinstance(it, dict) and it.get("type") == "reasoning"]
+        for i in reversed(idx[:max(0, len(idx) - keep)]):
+            del self._convo[i]
 
     def create_kwargs(self) -> Dict[str, Any]:
         if self.chaining:
@@ -179,21 +237,53 @@ class ResponsesConversation:
         calls: list,
         assistant_text: Optional[str] = None,
     ) -> None:
-        """Take in the model's output. *calls* are (call_id, name, arguments)."""
+        """Take in the model's output. *calls* are (call_id, name, arguments).
+
+        Without chaining every output item has to be replayed, reasoning items
+        included. Dropping those would discard the model's thinking at each turn
+        and leave a replayed conversation strictly worse than a chained one --
+        the model would rediscover its own reasoning from its tool calls alone.
+        """
         if self.chaining:
             self._previous_response_id = getattr(response, "id", None)
             return
-        if assistant_text and not calls:
+
+        replayed_calls = False
+        for item in (getattr(response, "output", None) or []):
+            kind = _item_type(item)
+            if kind == "reasoning":
+                sanitized = _replayable_reasoning(item)
+                if sanitized is not None:
+                    if self._reasoning_window is not None:
+                        self._trim_reasoning(self._reasoning_window - 1)
+                    self._convo.append(sanitized)
+            elif kind == "function_call":
+                d = _item_dict(item)
+                self._convo.append(
+                    {
+                        "type": "function_call",
+                        "call_id": d.get("call_id"),
+                        "name": d.get("name"),
+                        "arguments": d.get("arguments"),
+                    }
+                )
+                replayed_calls = True
+
+        if not replayed_calls and calls:
+            # Caller parsed calls we did not find on the response object.
+            for call_id, name, arguments in calls:
+                self._convo.append(
+                    {
+                        "type": "function_call",
+                        "call_id": call_id,
+                        "name": name,
+                        "arguments": arguments,
+                    }
+                )
+            replayed_calls = True
+
+        if assistant_text and not replayed_calls:
             self._convo.append({"role": "assistant", "content": assistant_text})
-        for call_id, name, arguments in calls:
-            self._convo.append(
-                {
-                    "type": "function_call",
-                    "call_id": call_id,
-                    "name": name,
-                    "arguments": arguments,
-                }
-            )
 
     def extend(self, items: list) -> None:
         """Queue what to send next (tool outputs, or a protocol reminder)."""
