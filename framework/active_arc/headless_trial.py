@@ -107,6 +107,15 @@ class ActiveArcTrialSession:
     test_correct: Optional[bool] = None
     shown_test_inputs: List[Tuple[int, Grid]] = field(default_factory=list)
     test_input_query_count: int = 0
+    # Matched-K arm: the trial must end with exactly this many successful queries
+    # before testing, so its evidence count matches the other arms. None = the
+    # model decides when to stop, which is the free-interaction condition.
+    forced_queries: Optional[int] = None
+
+    def remaining_forced_queries(self) -> Optional[int]:
+        if self.forced_queries is None:
+            return None
+        return max(0, self.forced_queries - self.query_count)
 
     def _matching_shown_test_round(self, grid: Grid) -> Optional[int]:
         for rnd, test_in in self.shown_test_inputs:
@@ -168,8 +177,46 @@ class ActiveArcTrialSession:
             "output": clone_grid(hp.output),
         }
 
+    def evidence_pairs_json(self) -> List[Dict[str, List[List[int]]]]:
+        """Every pair the model actually saw: the hot start, then its query results.
+
+        Outputs are the *shown* ones, so under ``--noisy-science`` the evidence
+        carries the same corruption the model reasoned from rather than the
+        gold answer it never saw.
+        """
+        pairs: List[Dict[str, List[List[int]]]] = []
+        hot = self.hot_start_json()
+        if hot is not None:
+            pairs.append(hot)
+        for item in self.history:
+            pairs.append(
+                {
+                    "input": clone_grid(item["input"]),
+                    "output": clone_grid(item["output"]),
+                }
+            )
+        return pairs
+
+    def official_test_items(self) -> List[Tuple[Grid, Grid]]:
+        """The task's own held-out items, which the static arm is scored on."""
+        n = min(len(self.task.test_inputs), len(self.task.test_outputs))
+        return [
+            (clone_grid(self.task.test_inputs[i]), clone_grid(self.task.test_outputs[i]))
+            for i in range(n)
+        ]
+
     def submit_query(self, grid: Grid) -> Dict[str, Any]:
         """Exploration only: run verifier (+ optional noise), increment score on success."""
+        remaining = self.remaining_forced_queries()
+        if remaining == 0 and self.phase == "explore":
+            return {
+                "ok": False,
+                "error": (
+                    f"Query budget spent ({self.forced_queries} of "
+                    f"{self.forced_queries}). Call request_test now."
+                ),
+                "queries_remaining": 0,
+            }
         if self.phase != "explore":
             return {
                 "ok": False,
@@ -233,6 +280,17 @@ class ActiveArcTrialSession:
             return {
                 "ok": False,
                 "error": f"request_test only from explore (now: {self.phase}).",
+            }
+        remaining = self.remaining_forced_queries()
+        if remaining:
+            return {
+                "ok": False,
+                "error": (
+                    f"{remaining} more quer{'y' if remaining == 1 else 'ies'} must be "
+                    f"submitted before testing ({self.query_count} of "
+                    f"{self.forced_queries} used). Call submit_query."
+                ),
+                "queries_remaining": remaining,
             }
         if self.program_test:
             self.phase = "test"
@@ -822,6 +880,7 @@ def create_trial_session(
     dataset: str = "arc",
     sample_family: bool = False,
     persist_sampled_family: bool = False,
+    forced_queries: Optional[int] = None,
 ) -> ActiveArcTrialSession:
     """Build a trial matching the Streamlit app (random eligible task or fixed ``task_id``).
 
@@ -953,4 +1012,5 @@ def create_trial_session(
         program_test=program_test,
         defer_program_eval=defer_program_eval,
         test_correct=None,
+        forced_queries=forced_queries,
     )

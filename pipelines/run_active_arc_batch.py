@@ -21,6 +21,7 @@ import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -31,7 +32,8 @@ from framework.active_arc.trial_record import build_trial_record
 from framework.prompting.active_arc_openai import run_openai_agent_loop
 from framework.prompting.active_arc_responses import run_active_arc_responses_loop
 from framework.prompting.active_arc_tools import DEFAULT_OPENAI_MODEL  # noqa: F401
-from framework.prompting.clients import PROVIDERS, resolve_target
+from framework.active_arc.evidence_test import run_evidence_tests
+from framework.prompting.clients import PROVIDERS, build_client, resolve_target
 from framework.tasks.arc_dataset import list_arc_agi_1_task_ids
 
 
@@ -69,6 +71,25 @@ def _parse_args() -> argparse.Namespace:
         "no Responses API, so it forces --backend chat.",
     )
     p.add_argument("--model", type=str, default=None)
+    p.add_argument(
+        "--forced-k",
+        type=str,
+        default=None,
+        metavar="auto|N",
+        help="Require exactly this many successful queries before testing, so the "
+        "trial's evidence count matches the other arms. 'auto' uses the task's own "
+        "training-pair count minus the hot start. Omitted = the model stops when it "
+        "likes (free interaction).",
+    )
+    p.add_argument(
+        "--evidence-test",
+        choices=["none", "official", "sampled", "both"],
+        default="none",
+        help="After exploring, re-answer held-out items from the gathered pairs alone, "
+        "in fresh context: the task's own official item(s), the trial's sampled one, "
+        "or both. Scores the evidence rather than the conversation.",
+    )
+    p.add_argument("--evidence-max-turns", type=int, default=8)
     p.add_argument("--max-turns", type=int, default=64)
     p.add_argument("--temperature", type=float, default=0.2)
     p.add_argument(
@@ -207,10 +228,31 @@ def _task_ids(args: argparse.Namespace) -> list[str]:
     raise SystemExit(f"Unsupported dataset: {args.dataset}")
 
 
+def _forced_k_for(args: argparse.Namespace, task_id: str) -> Optional[int]:
+    """How many queries this trial must make, to match the evidence the other arms get.
+
+    "auto" reads the task's own training-pair count, so the trial ends holding as
+    many pairs as the static arm is shown: the hot start counts as one of them,
+    hence K-1 queries. Tasks differ (2 to 10 pairs, median 3), so the budget is
+    per task rather than a single global number.
+    """
+    if args.forced_k is None:
+        return None
+    if str(args.forced_k).lower() == "auto":
+        from pipelines.run_static_batch import load_official
+        n_pairs = len(load_official(args.dataset, task_id).train_pairs)
+        k = n_pairs - (1 if args.hot_start else 0)
+    else:
+        k = int(args.forced_k)
+    return max(0, k)
+
+
 def _run_one(args: argparse.Namespace, task_id: str) -> dict:
+    forced = _forced_k_for(args, task_id)
     session = create_trial_session(
         seed=args.seed,
         task_id=task_id,
+        forced_queries=forced,
         hot_start=args.hot_start,
         noisy_science=args.noisy_science,
         re_trials=args.re_trials,
@@ -239,6 +281,20 @@ def _run_one(args: argparse.Namespace, task_id: str) -> dict:
             provider=args.provider,
             reasoning_effort=reasoning_effort,
         )
+    if args.evidence_test != "none" and not args.program_test:
+        try:
+            result["evidence_test"] = run_evidence_tests(
+                build_client(args.provider),
+                session,
+                model=args.model,
+                reasoning_effort=reasoning_effort,
+                which=args.evidence_test,
+                max_turns=args.evidence_max_turns,
+                provider=args.provider,
+            )
+        except Exception as e:
+            result["evidence_test"] = {"error": f"{type(e).__name__}: {e}"}
+
     return build_trial_record(
         session,
         result,

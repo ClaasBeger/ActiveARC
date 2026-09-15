@@ -158,13 +158,51 @@ def predict(client, train_pairs, test_input, *, test_index: int, n_tests: int, m
     return {"prediction": prediction, "reason": reason, "transcript": transcript, "usage": usage_totals(transcript)}
 
 
+def _generator_pairs(args, task_id: str, n: int):
+    """n pairs drawn from the task's generator, in place of its authored ones.
+
+    The random arm of the matched-K comparison: same count and same provenance
+    as the pairs an active trial could have queried for, but chosen by nobody.
+    Built from a trial session so the generator, verifier and seed are exactly
+    the ones the active arm would have used on this task.
+    """
+    from framework.active_arc.headless_trial import create_trial_session
+    from framework.active_arc.verifier_selection import sample_consistent_dynamic_pair
+    from framework.grids import GridPair
+
+    session = create_trial_session(seed=args.seed, task_id=task_id,
+                                   hot_start=True, dataset=args.dataset)
+    pairs = []
+    exclude = []
+    if session.hot_start_pair is not None:
+        pairs.append(session.hot_start_pair)
+        exclude.append(session.hot_start_pair.input)
+    while len(pairs) < n:
+        got = sample_consistent_dynamic_pair(
+            session.task, session._verifier_fn(), session.rng,
+            exclude_inputs=exclude or None,
+        )
+        if got is None:
+            break
+        pairs.append(GridPair(got.input, session._verifier_fn()(got.input)))
+        exclude.append(got.input)
+    return pairs
+
+
 def run_one(client, args, task_id: str) -> Dict[str, Any]:
     task = load_official(args.dataset, task_id)
     tests = list(zip(task.test_inputs, task.test_outputs))
+    train_pairs = task.train_pairs
+    if args.pair_source == "generator":
+        n = len(task.train_pairs) if args.n_pairs in (None, "auto") else int(args.n_pairs)
+        train_pairs = _generator_pairs(args, task_id, n)
+        if len(train_pairs) < n:
+            return {"task_id": task_id, "error": "sampler_exhausted",
+                    "n_pairs_wanted": n, "n_pairs_got": len(train_pairs)}
     items = []
     turns: List[Dict[str, Any]] = []
     for i, (tin, tout) in enumerate(tests):
-        res = predict(client, task.train_pairs, tin, test_index=i, n_tests=len(tests), model=args.model,
+        res = predict(client, train_pairs, tin, test_index=i, n_tests=len(tests), model=args.model,
                       reasoning_effort=args.reasoning_effort, max_turns=args.max_turns,
                       store=not args.no_store, provider=args.provider)
         pred = res["prediction"]
@@ -196,6 +234,15 @@ def main() -> None:
     p.add_argument("--model", type=str, default=None)
     p.add_argument("--provider", choices=list(PROVIDERS), default=None,
                    help="Default: inferred from --model, else openai.")
+    p.add_argument("--pair-source", choices=["official", "generator"], default="official",
+                   help="'generator' replaces the authored training pairs with the same "
+                        "number drawn at random from the task's generator -- the random "
+                        "arm of the matched-K comparison.")
+    p.add_argument("--n-pairs", type=str, default="auto",
+                   help="With --pair-source generator: how many pairs to draw "
+                        "(default 'auto' = the task's own training-pair count).")
+    p.add_argument("--seed", type=int, default=0,
+                   help="Seed for generator pair sampling.")
     p.add_argument("--reasoning-effort", type=str, default="low")
     p.add_argument("--max-turns", type=int, default=8)
     p.add_argument("--no-store", action="store_true")
@@ -221,6 +268,7 @@ def main() -> None:
     out_dir = Path(args.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     manifest = {"started_at": datetime.now(timezone.utc).isoformat(), "setting": "static", "dataset": args.dataset,
                 "model": args.model, "provider": args.provider,
+                "pair_source": args.pair_source, "n_pairs": args.n_pairs, "seed": args.seed,
                 "reasoning_effort": args.reasoning_effort, "max_turns": args.max_turns,
                 "offset": args.offset, "limit": args.limit, "per_concept_limit": args.per_concept_limit,
                 "task_ids": task_ids}
