@@ -14,7 +14,7 @@ from framework.active_arc.headless_trial import (
 )
 from framework.active_arc.verifier_selection import sample_consistent_dynamic_pair
 from framework.grids import Grid, GridPair, clone_grid, is_equal_grid, validate_grid
-from framework.inverse_query.sources import TaskPrograms, load_task_programs, prefer_readable_arc_verifier
+from framework.inverse_query.sources import TaskPrograms, load_task_programs
 from framework.tasks.base import Verifier
 
 Phase = Literal["teach", "exam", "done"]
@@ -48,6 +48,16 @@ class InverseQuerySession:
     n_show_transformed: int = 0
     n_query_student: int = 0
     n_failed_show: int = 0
+    # Free lookups of the verifier's implementation (ConceptARC): logged, not scored.
+    n_get_implementation: int = 0
+    # Teacher sanity check: the exam is drawn before teaching and the teacher,
+    # given its normal briefing, must solve every item; only then is the trial
+    # worth the student's cost. The same items are used for the student.
+    exam_predrawn: bool = False
+    exam_replaced: int = 0
+    teacher_exam_predictions: List[Optional[Grid]] = field(default_factory=list)
+    teacher_exam_correct: List[Optional[bool]] = field(default_factory=list)
+    teacher_exam_passed: Optional[bool] = None
 
     @property
     def task_id(self) -> str:
@@ -80,6 +90,17 @@ class InverseQuerySession:
         for probe in self.probes:
             seen.append(clone_grid(probe["input"]))
         return seen
+
+    def implementation_available(self) -> bool:
+        """Whether the verifier's code is offered by tool rather than inline."""
+        return self.programs.verifier_program_json is not None and bool(self.programs.verifier_source)
+
+    def get_verifier_implementation(self) -> Dict[str, Any]:
+        if not self.implementation_available():
+            return {"ok": False, "error": "No separate implementation for this task; the briefing is complete."}
+        self.n_get_implementation += 1
+        src = self.programs.verifier_source or ""
+        return {"ok": True, "implementation": src, "lines": src.count("\n") + 1}
 
     def teacher_sample_json(self) -> Optional[Dict[str, List[List[int]]]]:
         if self.teacher_sample is None:
@@ -197,14 +218,11 @@ class InverseQuerySession:
             ),
         }
 
-    def start_exam(self) -> Dict[str, Any]:
-        if self.phase != "teach":
-            return {"ok": False, "error": "start_exam is only valid during teaching."}
-        exclude = self._seen_inputs()
+    def _draw_exam_pairs(self, n: int, exclude: List[Grid]) -> Optional[List[GridPair]]:
         pairs: List[GridPair] = []
         rng = self.trial.rng
         verifier = self._verifier()
-        for _ in range(self.exam_n):
+        for _ in range(n):
             sampled = sample_consistent_dynamic_pair(
                 self.trial.task,
                 verifier,
@@ -213,17 +231,65 @@ class InverseQuerySession:
                 max_tries=200,
             )
             if sampled is None:
+                return None
+            gold = self._gold(sampled.input)
+            pairs.append(GridPair(clone_grid(sampled.input), gold))
+            exclude.append(clone_grid(sampled.input))
+        return pairs
+
+    def predraw_exam(self) -> Dict[str, Any]:
+        """Fix the exam items before teaching so the teacher can be checked on them."""
+        if self.phase != "teach" or self.demonstrations or self.probes:
+            return {"ok": False, "error": "predraw_exam must run before any teaching."}
+        pairs = self._draw_exam_pairs(self.exam_n, self._seen_inputs())
+        if pairs is None:
+            return {"ok": False, "sampler_exhausted": True,
+                    "message": f"Could not sample {self.exam_n} distinct exam pairs."}
+        self.exam_pairs = pairs
+        self.exam_predrawn = True
+        return {"ok": True, "exam_n": len(pairs)}
+
+    def record_teacher_exam(self, predictions: List[Optional[Grid]]) -> Dict[str, Any]:
+        self.teacher_exam_predictions = [clone_grid(p) if p is not None else None for p in predictions]
+        self.teacher_exam_correct = [
+            p is not None and is_equal_grid(p, pair.output)
+            for p, pair in zip(self.teacher_exam_predictions, self.exam_pairs)
+        ]
+        k = sum(1 for v in self.teacher_exam_correct if v)
+        self.teacher_exam_passed = bool(self.exam_pairs) and k == len(self.exam_pairs)
+        return {"ok": True, "n_correct": k, "exam_n": len(self.exam_pairs), "passed": self.teacher_exam_passed}
+
+    def start_exam(self) -> Dict[str, Any]:
+        if self.phase != "teach":
+            return {"ok": False, "error": "start_exam is only valid during teaching."}
+        exclude = self._seen_inputs()
+        if self.exam_predrawn:
+            # An item the teacher has since shown or probed is no longer held
+            # out; swap it for a fresh draw rather than tell the teacher which
+            # inputs the exam holds. The teacher check ran on the original.
+            pairs = []
+            for pair in self.exam_pairs:
+                if any(is_equal_grid(pair.input, g) for g in exclude):
+                    fresh = self._draw_exam_pairs(1, exclude)
+                    if fresh is None:
+                        return {"ok": False, "sampler_exhausted": True,
+                                "message": "Could not replace a leaked exam item."}
+                    pairs.extend(fresh)
+                    self.exam_replaced += 1
+                else:
+                    pairs.append(pair)
+                    exclude.append(clone_grid(pair.input))
+        else:
+            pairs = self._draw_exam_pairs(self.exam_n, exclude)
+            if pairs is None:
                 return {
                     "ok": False,
                     "sampler_exhausted": True,
                     "message": (
                         f"Could not sample {self.exam_n} distinct exam pairs "
-                        f"(got {len(pairs)}; {len(exclude)} prior input(s) excluded)."
+                        f"({len(exclude)} prior input(s) excluded)."
                     ),
                 }
-            gold = self._gold(sampled.input)
-            pairs.append(GridPair(clone_grid(sampled.input), gold))
-            exclude.append(clone_grid(sampled.input))
         self.exam_pairs = pairs
         self.exam_predictions = [None] * len(pairs)
         self.exam_correct = [None] * len(pairs)
@@ -330,7 +396,9 @@ def create_inverse_query_session(
         re_trials=False,
         fixed_test=False,
     )
-    prefer_readable_arc_verifier(trial)
+    # The gold oracle is the slot pick_verifier pinned -- the task's canonical
+    # verifier. It used to be swapped for a more readable one here, which put
+    # the exam in the hands of a verifier the census may have rejected.
     session = InverseQuerySession(
         trial=trial,
         programs=load_task_programs(trial),

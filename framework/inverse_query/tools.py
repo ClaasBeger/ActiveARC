@@ -103,6 +103,19 @@ SUBMIT_PREDICTION_TOOL: Dict[str, Any] = {
     "strict": True,
 }
 
+GET_VERIFIER_IMPLEMENTATION_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "name": "get_verifier_implementation",
+    "description": (
+        "Return the interpreter code that runs the verifier program in your briefing "
+        "(the functions behind its op names), trimmed to this program. Free: it is not "
+        "counted as a show or a probe and the Student never sees it. Several hundred "
+        "lines; call it when the descriptor and rule leave a convention unclear."
+    ),
+    "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    "strict": True,
+}
+
 TEACHER_TOOLS: List[Dict[str, Any]] = [
     SHOW_EXAMPLE_TOOL,
     SHOW_TRANSFORMED_INPUT_TOOL,
@@ -110,6 +123,22 @@ TEACHER_TOOLS: List[Dict[str, Any]] = [
     START_EXAM_TOOL,
 ]
 STUDENT_TOOLS: List[Dict[str, Any]] = [SUBMIT_PREDICTION_TOOL]
+
+
+def teacher_tools_for(session: InverseQuerySession) -> List[Dict[str, Any]]:
+    """The teacher's tools; the implementation lookup only where there is one to fetch."""
+    tools = list(TEACHER_TOOLS)
+    if session.implementation_available():
+        tools.append(GET_VERIFIER_IMPLEMENTATION_TOOL)
+    return tools
+
+
+def teacher_check_tools_for(session: InverseQuerySession) -> List[Dict[str, Any]]:
+    """During the sanity check the teacher predicts, but may still read the code."""
+    tools = list(STUDENT_TOOLS)
+    if session.implementation_available():
+        tools.append(GET_VERIFIER_IMPLEMENTATION_TOOL)
+    return tools
 
 
 def execute_teacher_tool(
@@ -140,6 +169,8 @@ def execute_teacher_tool(
         }
     if name == "start_exam":
         return session.start_exam()
+    if name == "get_verifier_implementation":
+        return session.get_verifier_implementation()
     return {"ok": False, "error": f"Unknown tool: {name}"}
 
 
@@ -151,6 +182,18 @@ def parse_student_prediction(arguments: Optional[str]) -> Dict[str, Any]:
         except json.JSONDecodeError as e:
             return {"ok": False, "error": f"Invalid JSON arguments: {e}"}
     grid = args.get("grid")
-    if not isinstance(grid, list):
+    if not isinstance(grid, list) or not grid:
         return {"ok": False, "error": "Missing or invalid grid for submit_prediction."}
+    # A malformed grid used to be accepted here and only fail later, silently,
+    # at scoring -- the model never learned its answer was ragged. Say so now,
+    # inside the turn budget, so it can resubmit.
+    if not all(isinstance(row, list) and row for row in grid):
+        return {"ok": False, "error": "Grid rows must be non-empty lists. Resubmit with submit_prediction."}
+    widths = sorted({len(row) for row in grid})
+    if len(widths) != 1:
+        return {"ok": False, "error": "Grid is not rectangular: row lengths %s. Every row must have the same "
+                                       "length. Resubmit with submit_prediction." % widths}
+    bad = [v for row in grid for v in row if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 9]
+    if bad:
+        return {"ok": False, "error": "Cells must be integers 0-9 (found %r). Resubmit with submit_prediction." % bad[:3]}
     return {"ok": True, "grid": grid}
