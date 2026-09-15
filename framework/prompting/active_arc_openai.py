@@ -19,7 +19,10 @@ from framework.prompting.active_arc_tools import (
     plain_text_protocol_reminder,
 )
 from framework.prompting.clients import (
+    PROVIDER_OPENROUTER,
     build_client,
+    cache_control_block,
+    provider_routing,
     reasoning_extra_body,
     resolve_model,
     resolve_provider,
@@ -41,15 +44,25 @@ def run_openai_agent_loop(
     temperature: float = 0.2,
     provider: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
+    pin_provider: bool = True,
+    prompt_cache: bool = False,
 ) -> Dict[str, Any]:
     """Run a Chat Completions tool loop until done, stop, or max_turns."""
     resolved_provider = resolve_provider(provider, model)
     resolved_model = resolve_model(resolved_provider, model)
     client = build_client(resolved_provider)
-    extra_body = reasoning_extra_body(resolved_provider, reasoning_effort)
+    extra_body = dict(reasoning_extra_body(resolved_provider, reasoning_effort))
+    if pin_provider and resolved_provider == PROVIDER_OPENROUTER:
+        extra_body["provider"] = provider_routing(resolved_model)
 
+    system_prompt = _system_prompt(session)
     messages: List[Dict[str, Any]] = [
-        {"role": "system", "content": _system_prompt(session)},
+        {
+            "role": "system",
+            "content": (
+                [cache_control_block(system_prompt)] if prompt_cache else system_prompt
+            ),
+        },
         {"role": "user", "content": build_task_user_message(session)},
     ]
 
@@ -61,6 +74,7 @@ def run_openai_agent_loop(
         "provider": resolved_provider,
         "model": resolved_model,
         "reasoning_effort": reasoning_effort,
+        "provider_routing": extra_body.get("provider"),
         "final": None,
         "usage": None,
     }
@@ -82,49 +96,39 @@ def run_openai_agent_loop(
         }
         if extra_body:
             create_kwargs["extra_body"] = extra_body
-        response = client.chat.completions.create(**create_kwargs)
-        choice = response.choices[0]
-        msg = choice.message
+        # Read the raw body: the SDK's typed message drops reasoning_details,
+        # which is exactly the field that has to go back for the model to keep
+        # its own thinking across turns.
+        raw = client.chat.completions.with_raw_response.create(**create_kwargs)
+        payload = json.loads(raw.text)
+        msg = payload["choices"][0]["message"]
+        raw_tool_calls = msg.get("tool_calls") or []
         tool_calls_meta = [
             {
-                "id": tc.id,
-                "name": tc.function.name,
-                "arguments": tc.function.arguments,
+                "id": tc.get("id"),
+                "name": (tc.get("function") or {}).get("name"),
+                "arguments": (tc.get("function") or {}).get("arguments"),
             }
-            for tc in (msg.tool_calls or [])
+            for tc in raw_tool_calls
         ]
         transcript.append(
             {
                 "turn": turn,
-                "assistant": msg.content,
+                "assistant": msg.get("content"),
                 "tool_calls": tool_calls_meta,
                 "tool_results": [],
-                "usage": chat_usage_to_responses_shape(
-                    getattr(response, "usage", None)
-                ),
+                "n_reasoning_details": len(msg.get("reasoning_details") or []),
+                "usage": chat_usage_to_responses_shape(payload.get("usage")),
             }
         )
 
-        assistant_msg: Dict[str, Any] = {
-            "role": "assistant",
-            "content": msg.content,
-        }
-        if msg.tool_calls:
-            assistant_msg["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    },
-                }
-                for tc in msg.tool_calls
-            ]
-        messages.append(assistant_msg)
+        # Replayed verbatim, reasoning_details included: anything rebuilt from
+        # parsed fields loses the signed reasoning and the model restarts its
+        # thinking every turn.
+        messages.append(json.loads(json.dumps(msg)))
 
-        if not msg.tool_calls:
-            reminder = plain_text_protocol_reminder(session, assistant_text=msg.content)
+        if not raw_tool_calls:
+            reminder = plain_text_protocol_reminder(session, assistant_text=msg.get("content"))
             if reminder is not None:
                 transcript[-1]["tool_results"].append(
                     {
@@ -137,14 +141,15 @@ def run_openai_agent_loop(
             return _finish(
                 {
                     "reason": "model_stop",
-                    "message": msg.content,
+                    "message": msg.get("content"),
                     "phase": session.phase,
                 }
             )
 
-        for tc in msg.tool_calls:
-            name = tc.function.name
-            out = execute_tool_call(session, name, tc.function.arguments)
+        for tc in raw_tool_calls:
+            fn = tc.get("function") or {}
+            name = fn.get("name")
+            out = execute_tool_call(session, name, fn.get("arguments"))
             transcript[-1]["tool_results"].append({"name": name, "result": out})
 
             if out.get("sampler_exhausted"):
@@ -170,7 +175,7 @@ def run_openai_agent_loop(
             messages.append(
                 {
                     "role": "tool",
-                    "tool_call_id": tc.id,
+                    "tool_call_id": tc.get("id"),
                     "content": json.dumps(out),
                 }
             )

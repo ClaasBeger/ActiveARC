@@ -101,7 +101,21 @@ def resolve_store(provider: str, store: bool) -> bool:
 
 
 def resolve_backend(provider: str, backend: str) -> Tuple[str, Optional[str]]:
-    """Return the backend actually usable for *provider*, plus a note if changed."""
+    """Return the backend to use for *provider*, plus a note if it was changed.
+
+    OpenRouter serves both surfaces, but only chat completions carries
+    reasoning_details -- the documented way to hand a model back its own signed
+    thinking. Its Responses translation exposes reasoning items that have to be
+    reassembled by hand, and Gemini rejects the result intermittently with
+    "Corrupted thought signature". So OpenRouter is routed to chat regardless of
+    what was asked for, and OpenAI keeps Responses, where previous_response_id
+    already keeps reasoning server-side.
+    """
+    if backend == "responses" and provider == PROVIDER_OPENROUTER:
+        return "chat", (
+            "OpenRouter carries signed reasoning only on chat completions "
+            "(reasoning_details); using the chat backend."
+        )
     if backend == "responses" and not supports_responses_api(provider):
         return "chat", (
             f"{provider} does not implement the Responses API; "
@@ -146,6 +160,35 @@ def reasoning_extra_body(
     if not reasoning_effort or reasoning_effort == "none":
         return {}
     return {"reasoning": {"effort": reasoning_effort}}
+
+
+# OpenRouter's id for the vendor's own first-party endpoint, where the id prefix
+# is not already it.
+_UPSTREAM_PROVIDER = {"google": "google-ai-studio"}
+
+
+def provider_routing(model: str) -> Dict[str, Any]:
+    """Pin the serving provider for an OpenRouter model.
+
+    OpenRouter load-balances across several upstreams by default, so successive
+    trials of the same experiment could be answered by different serving stacks
+    with different reasoning-serialization behaviour. An experiment wants one
+    known upstream, and no silent fallback to another.
+    """
+    vendor = model.split("/", 1)[0] if "/" in model else model
+    upstream = _UPSTREAM_PROVIDER.get(vendor, vendor)
+    return {"order": [upstream], "allow_fallbacks": False}
+
+
+def cache_control_block(text: str) -> Dict[str, Any]:
+    """A prompt-cache breakpoint for the stable prefix of a chat conversation.
+
+    Reads of a cached prefix cost about a tenth of a fresh one, which matters
+    because a replayed conversation resends its whole history every turn. The
+    first call pays a write premium, so this only pays off in a trial that takes
+    more than one turn.
+    """
+    return {"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
 
 
 def _item_dict(item: Any) -> Dict[str, Any]:

@@ -100,6 +100,21 @@ def _parse_args() -> argparse.Namespace:
         "Not the trial's score; use --test-source for that.",
     )
     p.add_argument("--evidence-max-turns", type=int, default=8)
+    p.add_argument(
+        "--pin-provider",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="OpenRouter only: pin the serving upstream and forbid fallbacks, so "
+        "every trial is answered by the same stack (default: on).",
+    )
+    p.add_argument(
+        "--prompt-cache",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="OpenRouter only: mark the system prompt as a cache breakpoint. Repeated "
+        "input then costs about a tenth, but the first call pays a write premium, so "
+        "this only pays off when trials run several turns (e.g. with --forced-k).",
+    )
     p.add_argument("--max-turns", type=int, default=64)
     p.add_argument("--temperature", type=float, default=0.2)
     p.add_argument(
@@ -291,6 +306,8 @@ def _run_one(args: argparse.Namespace, task_id: str) -> dict:
             temperature=args.temperature,
             provider=args.provider,
             reasoning_effort=reasoning_effort,
+            pin_provider=args.pin_provider,
+            prompt_cache=args.prompt_cache,
         )
     if args.evidence_test != "none" and not args.program_test:
         try:
