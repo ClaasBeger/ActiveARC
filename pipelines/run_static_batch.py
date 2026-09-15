@@ -135,9 +135,9 @@ def predict(client, train_pairs, test_input, *, test_index: int, n_tests: int, m
             reminder = ("No prediction was submitted. Call submit_prediction with "
                         '{"grid": [[...], ...]} for test_input.')
             log["tool_results"].append({"name": "_protocol_reminder", "result": {"ok": False, "error": reminder}})
-            pending = [{"role": "user", "content": reminder}]
+            convo.extend([{"role": "user", "content": reminder}])
             continue
-        pending = []
+        tool_outputs: List[Any] = []
         submitted = False
         for item in calls:
             call_id, name, arguments = _function_call_fields(item)
@@ -150,7 +150,8 @@ def predict(client, train_pairs, test_input, *, test_index: int, n_tests: int, m
                 else:
                     out = parsed
             log["tool_results"].append({"name": name, "result": out})
-            pending.append({"type": "function_call_output", "call_id": call_id, "output": json.dumps(out)})
+            tool_outputs.append({"type": "function_call_output", "call_id": call_id, "output": json.dumps(out)})
+        convo.extend(tool_outputs)
         if submitted:
             reason = "submitted"
             break
