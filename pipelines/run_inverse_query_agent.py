@@ -45,6 +45,10 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help=f"OpenAI model name (default: env OPENAI_MODEL or {DEFAULT_OPENAI_MODEL}).",
     )
+    p.add_argument("--teacher-model", type=str, default=None, help="Teacher model (default: --model).")
+    p.add_argument("--student-model", type=str, default=None, help="Student model (default: --model).")
+    p.add_argument("--teacher-check", action=argparse.BooleanOptionalAction, default=False,
+                   help="Teacher must solve the pre-drawn exam before teaching.")
     p.add_argument("--max-turns", type=int, default=64, help="Teacher tool-loop budget.")
     p.add_argument(
         "--student-max-turns",
@@ -76,6 +80,9 @@ def main() -> None:
     result = run_inverse_query_responses_loop(
         session,
         model=args.model,
+        teacher_model=args.teacher_model,
+        student_model=args.student_model,
+        teacher_check=args.teacher_check,
         max_turns=args.max_turns,
         student_max_turns=args.student_max_turns,
         reasoning_effort=reasoning_effort,

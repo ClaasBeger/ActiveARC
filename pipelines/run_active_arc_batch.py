@@ -124,6 +124,31 @@ def _conceptarc_sort_key(task_id: str) -> tuple[str, int, str]:
     return (concept, int(digits) if digits else 0, name)
 
 
+
+_NON_TRIAL_FILES = {
+    "manifest.json", "summary.json", "summary.jsonl", "program_scores.json",
+    "oracle_recheck.json", "oracle_recheck_canon.json", "INVALID.json",
+}
+
+
+def _row_from_record(task_id: str, record: dict) -> dict:
+    """The summary row for one trial, from its record (fresh or read back from disk)."""
+    if record.get("error") and "transcript" not in record:
+        return {"task_id": task_id, "ok": False, "error": record["error"],
+                "elapsed_s": record.get("elapsed_s")}
+    return {
+        "task_id": task_id,
+        "ok": True,
+        "correct": record.get("correct"),
+        "query_count": record.get("query_count"),
+        "test_input_query_count": record.get("test_input_query_count", 0),
+        "turns": len(record.get("transcript") or []),
+        "usage": record.get("usage"),
+        "elapsed_s": record.get("elapsed_s"),
+        "final_reason": (record.get("final") or {}).get("reason"),
+    }
+
+
 def _task_ids(args: argparse.Namespace) -> list[str]:
     if args.task_ids:
         return list(args.task_ids)
@@ -243,7 +268,18 @@ def main() -> None:
             "defer_program_eval": args.defer_program_eval,
         },
     }
-    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    manifest_path = out_dir / "manifest.json"
+    if args.task_ids and manifest_path.is_file():
+        # Re-recording a few trials into an existing run: the run's manifest
+        # stays the run's, and the re-recording is logged on it instead.
+        existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+        existing.setdefault("rerecordings", []).append({
+            "at": manifest["started_at"], "task_ids": task_ids,
+            "model": manifest["model"], "reasoning_effort": manifest["reasoning_effort"],
+            "flags": manifest["flags"],
+        })
+        manifest = existing
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     summary_path = out_dir / "summary.jsonl"
     rows: list[dict] = []
@@ -275,17 +311,7 @@ def main() -> None:
             record = _run_one(args, task_id)
             record["elapsed_s"] = round(time.perf_counter() - started, 3)
             out_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
-            row = {
-                "task_id": task_id,
-                "ok": True,
-                "correct": record.get("correct"),
-                "query_count": record.get("query_count"),
-                "test_input_query_count": record.get("test_input_query_count", 0),
-                "turns": len(record.get("transcript") or []),
-                "usage": record.get("usage"),
-                "elapsed_s": record["elapsed_s"],
-                "final_reason": (record.get("final") or {}).get("reason"),
-            }
+            row = _row_from_record(task_id, record)
             status = "ok"
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
@@ -317,6 +343,24 @@ def main() -> None:
                 f"turns={row.get('turns')} tokens={row.get('usage', {}).get('total_tokens')}",
                 flush=True,
             )
+
+    if args.task_ids:
+        # The summary describes the whole run directory. Rows for trials not
+        # touched by this invocation come from their files on disk.
+        touched = {r["task_id"] for r in rows}
+        for f in sorted(out_dir.glob("*.json")):
+            if f.name in _NON_TRIAL_FILES:
+                continue
+            try:
+                rec = json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            tid = rec.get("task_id")
+            if not tid or tid in touched:
+                continue
+            rows.append(_row_from_record(tid, rec))
+        rows.sort(key=lambda r: str(r.get("task_id")))
+        task_ids = [r["task_id"] for r in rows]
 
     finished = {
         "finished_at": datetime.now(timezone.utc).isoformat(),

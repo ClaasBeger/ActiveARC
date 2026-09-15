@@ -7,15 +7,16 @@ import json
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from framework.active_arc.headless_trial import ActiveArcTrialSession
 from framework.corruption.golf_ast import golf_solution_path
 from framework.dimensions.classification_distribution import VerifierSlot
 from framework.tasks.arc_dataset import ROOT_DIR, _arc_gen_id_to_task_num_and_generator
 
-# Inverse Query on ARC-AGI-1: readable RE-ARC verifier over golf one-liners.
-# Generator source is chosen separately (ARC-GEN first, then RE-ARC generate_*).
+# Kept for callers that still import it. The teacher is no longer handed a
+# verifier chosen for readability: the gold oracle is whatever ``pick_verifier``
+# pinned -- the task's canonical slot -- and the source shown is that slot's.
 IQ_ARC_VERIFIER_PREFERENCE: tuple[str, ...] = (
     "re_arc",
     "google",
@@ -40,6 +41,10 @@ class TaskPrograms:
     nl_rule: Optional[str]
     generator_kind: Optional[str] = None
     verifier_kind: Optional[str] = None
+    nl_rule_source: Optional[str] = None
+    # ConceptARC only: the DSL descriptor itself, shown as a JSON object beside
+    # the bundled interpreter source.
+    verifier_program_json: Optional[Dict[str, Any]] = None
 
 
 def prefer_readable_arc_verifier(session: ActiveArcTrialSession) -> None:
@@ -226,7 +231,61 @@ def _golf_verifier_source(task_id: str, slot: VerifierSlot) -> Optional[str]:
     path = golf_solution_path(task_id, slot)  # type: ignore[arg-type]
     if path is not None:
         return _read_text(path)
+    if slot == "keymoon":
+        # Same fallback as the runtime loader: the bundled snapshot ships the
+        # solutions inside submission.zip rather than as files under sols/.
+        import zipfile
+
+        from framework.tasks.arc_dataset import _arc_gen_id_to_task_num_and_generator
+
+        lookup = _arc_gen_id_to_task_num_and_generator(task_id)
+        zip_path = ROOT_DIR / "external" / "golf" / "submission.zip"
+        if lookup is not None and zip_path.is_file():
+            task_num, _ = lookup
+            try:
+                with zipfile.ZipFile(zip_path) as zf:
+                    raw = zf.read(f"task{task_num:03d}.py")
+            except (KeyError, zipfile.BadZipFile, OSError):
+                return None
+            for enc in ("utf-8", "cp1252", "latin-1"):
+                try:
+                    return raw.decode(enc)
+                except UnicodeDecodeError:
+                    continue
     return None
+
+
+def _parc_verifier_source(task_id: str) -> tuple[Optional[str], Optional[str]]:
+    """The P-ARC verifier with the rule it delegates to.
+
+    Most ``verifier.py`` files are a 19-line wrapper: ``from generator import
+    transform_tNN`` plus a shape check. The rule lives in ``transform_tNN`` in
+    ``generator.py``, so that function and the helpers it reaches are bundled
+    ahead of the wrapper, RE-ARC style. The sampling side of ``generator.py``
+    (``generate*``) is not referenced by any transform and is never included.
+    Nine tasks have a self-contained ``verifier.py``; those go in as they are.
+    """
+    import re as _re
+
+    from framework.tasks.parc_dataset import parc_source_paths
+
+    gen_path, ver_path = parc_source_paths(task_id)
+    ver_src = _read_text(ver_path)
+    if not ver_src:
+        return None, None
+    label = str(ver_path)
+    m = _re.search(r"^from generator import ([\w, ]+)$", ver_src, _re.M)
+    if not m:
+        return ver_src, label
+    names = {n.strip() for n in m.group(1).split(",") if n.strip()}
+    gen_src = _read_text(gen_path) or ""
+    index = {k: v for k, v in _index_top_level(gen_src).items() if not k.startswith("generate")}
+    helpers = _bundle_helpers(index, names)
+    if not helpers:
+        return ver_src, label
+    # No banner comments: the wrapper's own docstring names the task, and the
+    # transform's name says what it is. The bundled helpers simply precede it.
+    return helpers.rstrip() + "\n\n\n" + ver_src.strip() + "\n", label
 
 
 def _custom_verifier_source(session: ActiveArcTrialSession) -> tuple[Optional[str], Optional[str]]:
@@ -243,29 +302,34 @@ def _custom_verifier_source(session: ActiveArcTrialSession) -> tuple[Optional[st
         files = list_agi2_valid_source_paths(task_id)
         if not files:
             return None, None
-        chunks = []
-        labels = []
-        for cid, path in files:
-            text = _read_text(path)
-            if text:
-                chunks.append(f"# candidate {cid} ({path.name})\n{text}")
-                labels.append(str(path))
-        return ("\n\n".join(chunks) if chunks else None), "; ".join(labels) or None
+        # The index puts the canonical candidate first; that one is the gold
+        # oracle, so it is the only one the teacher should read.
+        cid, path = files[0]
+        text = _read_text(path)
+        return (f"# candidate {cid} ({path.name})\n{text}" if text else None), str(path)
     if dataset == "conceptarc":
         program = getattr(session.task, "_conceptarc_program_json", None)
         if isinstance(program, dict):
-            return json.dumps(program, indent=2), "conceptarc DSL program"
+            from framework.inverse_query.conceptarc_dsl_source import conceptarc_verifier_source
+
+            bundled, _info = conceptarc_verifier_source(program.get("program") or program)
+            return (bundled or json.dumps(program, indent=2)), "conceptarc DSL program"
         from framework.integrations.conceptarc_adapter import _program_path
 
         path = _program_path(task_id)
         if path is None:
             return None, None
         data = json.loads(path.read_text(encoding="utf-8"))
-        slim = {
-            k: data[k]
-            for k in ("concept", "description", "program", "program_kind", "task_id")
-            if k in data
-        }
+        # The descriptor alone says nothing a reader can use; bundle the
+        # interpreter, trimmed to this program's branches, the way RE-ARC
+        # verifiers come with the DSL primitives they call.
+        from framework.inverse_query.conceptarc_dsl_source import conceptarc_verifier_source
+
+        program = data.get("program") or {}
+        bundled, _info = conceptarc_verifier_source(program)
+        if bundled:
+            return bundled, str(path)
+        slim = {k: data[k] for k in ("concept", "program_kind", "program") if k in data}
         return json.dumps(slim, indent=2), str(path)
     return None, None
 
@@ -301,69 +365,113 @@ def _nl_rule(session: ActiveArcTrialSession) -> Optional[str]:
             val = payload.get(key)
             if isinstance(val, str) and val.strip():
                 return val.strip()
-    if session.dataset == "arc":
-        from framework.integrations.nl_rules import larc_rule
+    if session.dataset in ("arc", "arc2", "parc"):
+        # P-ARC too: the Test2 JSONs carry no rule text, the aggregate has the
+        # generator docstrings for all 50 tasks.
+        from framework.integrations.nl_rules import collected_rule
 
-        return larc_rule(session.task_id)
-    if session.dataset == "arc2":
-        from framework.integrations.nl_rules import marc2_rule
-
-        return marc2_rule(session.task_id)
+        found = collected_rule(session.task_id, session.dataset)
+        return found[0] if found else None
     return None
 
 
+def _nl_rule_source(session: ActiveArcTrialSession) -> Optional[str]:
+    if session.dataset in ("arc", "arc2", "parc"):
+        from framework.integrations.nl_rules import collected_rule
+
+        found = collected_rule(session.task_id, session.dataset)
+        return found[1] if found else None
+    if session.dataset == "conceptarc":
+        from framework.integrations.conceptarc_adapter import conceptarc_ground_truth_rule
+
+        return "conceptarc_rules_csv" if conceptarc_ground_truth_rule(session.task_id) else "program_description"
+    return None
+
+
+def _local_custom_source(task_id: str) -> tuple[Optional[str], Optional[str]]:
+    """Source of the hand-written verifier in ``framework/custom_verifiers``."""
+    import inspect
+
+    try:
+        from framework.custom_verifiers.registry import get_custom_verifier
+        fn = get_custom_verifier(task_id)
+    except Exception:
+        return None, None
+    if fn is None:
+        return None, None
+    try:
+        module = inspect.getmodule(fn)
+        # A fixes/<task_id>.py module is one verifier; show the whole file. An
+        # in-registry _solve_<task_id> shows just that function and its helpers
+        # would be noise, so the function alone.
+        if module is not None and module.__name__.endswith("fixes.%s" % task_id):
+            return inspect.getsource(module), "framework/custom_verifiers/fixes/%s.py" % task_id
+        return inspect.getsource(fn), "framework/custom_verifiers/registry.py::%s" % fn.__name__
+    except (OSError, TypeError):
+        return None, None
+
+
 def load_task_programs(session: ActiveArcTrialSession) -> TaskPrograms:
-    """Collect teacher-facing programs. ARC-GEN generator beats RE-ARC; RE-ARC verifier beats golf."""
+    """Collect what the teacher is handed: the gold verifier's source and the rule.
+
+    No generator: the teacher gets one verified example, the natural-language
+    rule and the verifier that judges the exam -- nothing that describes the
+    input distribution.
+    """
     slot = session.verifier_slot
-    gen_src: Optional[str] = None
-    gen_label: Optional[str] = None
-    gen_kind: Optional[str] = None
     ver_src: Optional[str] = None
     ver_label: Optional[str] = None
     ver_kind: Optional[str] = None
+    program_json: Optional[Dict[str, Any]] = None
 
     if session.dataset == "parc":
-        from framework.tasks.parc_dataset import parc_source_paths
-
-        gen_path, ver_path = parc_source_paths(session.task_id)
-        gen_src, gen_label = _read_text(gen_path), str(gen_path)
-        ver_src, ver_label = _read_text(ver_path), str(ver_path)
-        gen_kind, ver_kind = "parc", "parc"
+        ver_src, ver_label = _parc_verifier_source(session.task_id)
+        ver_kind = "parc"
     elif session.dataset == "conceptarc":
-        gen_src, gen_label = _custom_verifier_source(session)
-        ver_src, ver_label = gen_src, gen_label
-        gen_kind = ver_kind = "conceptarc"
+        ver_src, ver_label = _custom_verifier_source(session)
+        ver_kind = "conceptarc"
+        program_json = _conceptarc_descriptor(session)
     else:
-        gen_src, gen_label = _arc_gen_generator_source(session.task_id)
-        if gen_src:
-            gen_kind = "arc_gen"
-        else:
-            gen_src, gen_label = _re_arc_generator_source(session.task_id)
-            if gen_src:
-                gen_kind = "re_arc"
-
         if slot == "re_arc":
             ver_src = _re_arc_verifier_source(session.task_id)
             if ver_src:
-                ver_label = f"re_arc verify_{session.task_id}"
-                ver_kind = "re_arc"
+                ver_label, ver_kind = f"re_arc verify_{session.task_id}", "re_arc"
         elif slot in ("google", "keymoon", "neurips"):
             ver_src = _golf_verifier_source(session.task_id, slot)
             path = golf_solution_path(session.task_id, slot)  # type: ignore[arg-type]
             ver_label = str(path) if path is not None else slot
             ver_kind = slot
-        if ver_src is None:
-            ver_src, ver_label = _custom_verifier_source(session)
+        elif slot == "custom":
+            if session.dataset == "arc":
+                ver_src, ver_label = _local_custom_source(session.task_id)
+            if ver_src is None:
+                ver_src, ver_label = _custom_verifier_source(session)
             if ver_src:
                 ver_kind = "custom"
 
     return TaskPrograms(
-        generator_source=gen_src,
-        generator_label=gen_label,
+        generator_source=None,
+        generator_label=None,
         verifier_source=ver_src,
         verifier_label=ver_label,
         verifier_slot=slot,
         nl_rule=_nl_rule(session),
-        generator_kind=gen_kind,
+        generator_kind=None,
         verifier_kind=ver_kind,
+        nl_rule_source=_nl_rule_source(session),
+        verifier_program_json=program_json,
     )
+
+
+def _conceptarc_descriptor(session: ActiveArcTrialSession) -> Optional[Dict[str, Any]]:
+    """The DSL program without its layout: what the verifier does, not how inputs are made."""
+    program = getattr(session.task, "_conceptarc_program_json", None)
+    if not isinstance(program, dict):
+        from framework.integrations.conceptarc_adapter import _program_path
+
+        path = _program_path(session.task_id)
+        if path is None:
+            return None
+        program = json.loads(Path(path).read_text(encoding="utf-8"))
+    inner = program.get("program") if isinstance(program.get("program"), dict) else program
+    return {k: v for k, v in inner.items() if k != "layout"}

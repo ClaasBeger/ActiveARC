@@ -14,6 +14,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from framework.grids import Grid, clone_grid, is_equal_grid
+from framework.prompting.active_arc_tools import REQUEST_TEST_TOOL_NAMES
 
 
 def audit_duplicate_shown_tests(trial: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -24,7 +25,7 @@ def audit_duplicate_shown_tests(trial: Dict[str, Any]) -> List[Dict[str, Any]]:
         calls = turn.get("tool_calls") or []
         results = turn.get("tool_results") or []
         for i, call in enumerate(calls):
-            if call.get("name") != "finish_exploration":
+            if call.get("name") not in REQUEST_TEST_TOOL_NAMES:
                 continue
             if i >= len(results):
                 continue
@@ -84,7 +85,7 @@ def retroflag_trial(trial: Dict[str, Any]) -> Dict[str, Any]:
             if i < len(results):
                 result = dict(results[i].get("result") or {})
 
-            if name == "finish_exploration" and result.get("test_input_grid"):
+            if name in REQUEST_TEST_TOOL_NAMES and result.get("test_input_grid"):
                 rnd = int(result.get("test_round") or len(shown) + 1)
                 shown.append((rnd, clone_grid(result["test_input_grid"])))
 

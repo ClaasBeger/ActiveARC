@@ -36,8 +36,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-SKIP_FILES = {"manifest.json", "summary.json", "program_scores.json",
-              "oracle_recheck.json"}
+SKIP_FILES = {"manifest.json", "summary.json", "summary.jsonl", "program_scores.json",
+              "oracle_recheck.json", "oracle_recheck_canon.json", "INVALID.json"}
 # Read from the environment, not a module global set in main(): workers are
 # spawned, so they re-import this module and would otherwise keep the default.
 # Some golf verifiers need ~40s on a single 9x9 grid.
@@ -114,8 +114,19 @@ def _answer(fn, grid):
 
 
 def _submitted_grid(record: Dict[str, Any]) -> Optional[List[List[int]]]:
+    """The grid the trial was judged on: the last *accepted* submit_final_answer.
+
+    A first submission can be rejected by the tool (a ragged grid, say) and
+    corrected on the next turn; the verdict belongs to the corrected one. The
+    first-call version of this once flagged such a trial as "verdict changed".
+    Falls back to the last call when no result was recorded alongside.
+    """
+    accepted: Optional[List[List[int]]] = None
+    last: Optional[List[List[int]]] = None
     for turn in record.get("transcript") or []:
-        for call in turn.get("tool_calls") or []:
+        calls = turn.get("tool_calls") or []
+        results = turn.get("tool_results") or []
+        for i, call in enumerate(calls):
             if call.get("name") != "submit_final_answer":
                 continue
             args = call.get("arguments")
@@ -124,9 +135,13 @@ def _submitted_grid(record: Dict[str, Any]) -> Optional[List[List[int]]]:
                     args = json.loads(args)
                 except Exception:
                     continue
-            if isinstance(args, dict) and isinstance(args.get("grid"), list):
-                return args["grid"]
-    return None
+            if not (isinstance(args, dict) and isinstance(args.get("grid"), list)):
+                continue
+            last = args["grid"]
+            res = (results[i].get("result") or {}) if i < len(results) and isinstance(results[i], dict) else {}
+            if res.get("ok") and res.get("done"):
+                accepted = args["grid"]
+    return accepted if accepted is not None else last
 
 
 def recheck_record(path: Path) -> Dict[str, Any]:
@@ -140,6 +155,20 @@ def recheck_record(path: Path) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "task_id": task_id, "dataset": dataset, "slot": slot, "path": str(path),
     }
+    # --canon: judge the recorded answers by the task's canonical verifier rather
+    # than the slot the trial happened to pin. A slot the census rejects may
+    # still have answered every question this trial asked correctly; this is
+    # how that is decided.
+    if os.environ.get("RECHECK_CANON") == "1":
+        canon = None
+        if dataset == "arc":
+            from framework.verifier_selection import csv_selected_slot_for_task
+            canon = csv_selected_slot_for_task(task_id)
+        elif dataset == "arc2":
+            canon = "custom"        # canon.json orders the canonical candidate first
+        if canon:
+            out["canon_slot"] = canon
+            slot = canon
     try:
         task = _load_task(dataset, task_id)
         fn = _verifier(dataset, task, slot)
@@ -237,8 +266,11 @@ def main() -> None:
                    help="Seconds a single verifier call may take (default 60).")
     p.add_argument("--write", action=argparse.BooleanOptionalAction, default=False,
                    help="Annotate each trial JSON with an oracle_recheck block.")
+    p.add_argument("--canon", action="store_true",
+                   help="Replay against each task's canonical verifier instead of the pinned slot.")
     args = p.parse_args()
     os.environ["RECHECK_TIMEOUT_S"] = str(args.timeout)
+    os.environ["RECHECK_CANON"] = "1" if args.canon else "0"
 
     import multiprocessing as mp
 
@@ -264,7 +296,7 @@ def main() -> None:
               "(timeouts %d) | malformed answers %d | verdicts changed %3d" % (
                   d.name, len(results), len(stale), len(hot), moved_q, timed,
                   malformed_q, len(verdicts)))
-        for r in sorted(stale, key=lambda r: r["task_id"])[:12]:
+        for r in sorted(stale, key=lambda r: r["task_id"]):
             print("    %-12s slot=%-8s hot=%s queries_moved=%d verdict %s->%s" % (
                 r["task_id"], r.get("slot"), r.get("hot_start_ok"),
                 len(r.get("queries_moved") or []),
@@ -277,8 +309,11 @@ def main() -> None:
                 if r is None:
                     continue
                 rec = json.loads(f.read_text(encoding="utf-8"))
-                rec["oracle_recheck"] = {k: v for k, v in r.items() if k != "path"}
-                rec["oracle_recheck"]["checked_at"] = stamp
+                # A canon replay is a different question from the pinned-slot one,
+                # so it lives under its own key rather than overwriting the first.
+                key = "oracle_recheck_canon" if args.canon else "oracle_recheck"
+                rec[key] = {k: v for k, v in r.items() if k != "path"}
+                rec[key]["checked_at"] = stamp
                 f.write_text(json.dumps(rec, indent=2), encoding="utf-8")
             summary = {
                 "run": d.name, "checked_at": stamp, "trials": len(results),
@@ -286,7 +321,7 @@ def main() -> None:
                 "queries_moved": moved_q, "verdicts_changed": len(verdicts),
                 "stale_tasks": sorted(r["task_id"] for r in stale),
             }
-            (d / "oracle_recheck.json").write_text(json.dumps(summary, indent=2),
+            (d / ("oracle_recheck_canon.json" if args.canon else "oracle_recheck.json")).write_text(json.dumps(summary, indent=2),
                                                    encoding="utf-8")
 
 

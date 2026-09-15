@@ -308,6 +308,13 @@ def _load_parc_stable_pairs(task_num: int) -> List[GridPair]:
     return out
 
 
+def parc_source_paths(task_id: str) -> tuple[Path, Path]:
+    """Return ``(generator.py, verifier.py)`` for a P-ARC task."""
+    task_num = parse_parc_task_num(task_id)
+    d = _task_dir(task_num)
+    return d / "generator.py", d / "verifier.py"
+
+
 @lru_cache(maxsize=1)
 def list_parc_task_ids() -> tuple[str, ...]:
     """Return canonical ids for every resolvable P-ARC task (``test2_t1`` …)."""

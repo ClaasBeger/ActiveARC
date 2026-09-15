@@ -320,16 +320,45 @@ def plain_text_protocol_reminder(
     *,
     assistant_text: Optional[str] = None,
 ) -> Optional[str]:
-    """Reminder when the model pastes a grid as plain text; surrenders return None."""
-    if not looks_like_raw_grid(assistant_text):
-        return None
+    """What to say back when a turn produced no tool call.
+
+    A pasted grid gets the phase-specific correction. Anything else -- prose,
+    or a turn that came back with nothing but a reasoning item and no message
+    at all -- gets a nudge naming the tools that move the trial forward. A
+    response with no tool call is not an answer and is not a decision to stop,
+    so the caller keeps going; only its turn budget ends a trial without one.
+    """
+    if looks_like_raw_grid(assistant_text):
+        if session.phase == "test":
+            return test_phase_tool_required_message(
+                assistant_text=assistant_text, program_mode=session.program_test
+            )
+        if session.phase == "explore":
+            return explore_phase_grid_dump_message(assistant_text=assistant_text)
+    return no_tool_call_message(session, assistant_text=assistant_text)
+
+
+def no_tool_call_message(
+    session: ActiveArcTrialSession, *, assistant_text: Optional[str] = None
+) -> str:
+    """Nudge for a turn without a tool call, naming the tools for the current phase."""
+    preview = ""
+    if assistant_text and assistant_text.strip():
+        trimmed = assistant_text.strip()
+        if len(trimmed) > 80:
+            trimmed = trimmed[:77] + "..."
+        preview = f" Your message ({trimmed!r}) reached no tool."
     if session.phase == "test":
-        return test_phase_tool_required_message(
-            assistant_text=assistant_text, program_mode=session.program_test
+        tool = "submit_program" if session.program_test else "submit_final_answer"
+        return (
+            f"No tool was called.{preview} The trial only advances through tool calls: "
+            f"call {tool} with your answer for the test input."
         )
-    if session.phase == "explore":
-        return explore_phase_grid_dump_message(assistant_text=assistant_text)
-    return None
+    return (
+        f"No tool was called.{preview} The trial only advances through tool calls: "
+        "call submit_query with an input grid to ask the oracle, or request_test when "
+        "you are ready for the test input."
+    )
 
 
 def test_phase_tool_required_message(

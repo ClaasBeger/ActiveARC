@@ -51,9 +51,25 @@ def _load_verify(path: Path) -> Optional[Verifier]:
         return None
 
 
+# task_id -> candidate_id that is the one to judge by. Several candidates can be
+# promoted for a task and still differ off the distribution they were validated
+# on, so the choice is recorded rather than left to filename order.
+CANON_PATH = VALID_DIR.parent / "canon.json"
+
+
+def _canon_map() -> Dict[str, str]:
+    if not CANON_PATH.is_file():
+        return {}
+    try:
+        payload = json.loads(CANON_PATH.read_text())
+    except Exception:
+        return {}
+    return {k: str(v) for k, v in (payload.get("canon") or {}).items()}
+
+
 @lru_cache(maxsize=1)
 def _index() -> Dict[str, List[Tuple[str, Path]]]:
-    """task_id -> [(candidate_id, path), ...]"""
+    """task_id -> [(candidate_id, path), ...], canonical candidate first."""
     out: Dict[str, List[Tuple[str, Path]]] = {}
     if not VALID_DIR.is_dir():
         return out
@@ -66,6 +82,11 @@ def _index() -> Dict[str, List[Tuple[str, Path]]]:
             except Exception:
                 pass
         out.setdefault(py.parent.name, []).append((cid, py))
+    canon = _canon_map()
+    for task_id, items in out.items():
+        want = canon.get(task_id)
+        if want:
+            items.sort(key=lambda it: (it[0] != want, it[0]))
     return out
 
 

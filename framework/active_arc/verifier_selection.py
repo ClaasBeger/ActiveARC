@@ -10,6 +10,7 @@ from framework.tasks.arc_dataset import list_arc_agi_1_task_ids, load_task
 from framework.tasks.base import ArcTask, Verifier
 from framework.verifier_selection import (
     clear_verifier_csv_cache,
+    csv_selected_slot_for_task,
     csv_slots_for_task,
     default_verifiers_csv_path,
     eligible_task_ids_from_csv,
@@ -116,9 +117,15 @@ def pick_verifier(
 ) -> Optional[Tuple[VerifierSlot, Verifier]]:
     """Choose one verifier for *task* and pin it for the rest of the session.
 
-    Order: a pin from an earlier trial in this session, then ``custom``, then
-    ``re_arc``, then a uniform sample among the remaining slots.
+    Order: a pin from an earlier trial in this session, then the canonical slot
+    the CSV records for the task, then ``custom``, then ``re_arc``, and only if
+    none of those is available a uniform sample among the remaining slots.
     Returns ``None`` if the task has no valid verifier.
+
+    The canonical slot comes first because being *listed* valid is not the same
+    as being right: a slot audited against a narrower generator can still
+    disagree once the generator is widened, and a random draw would then hand
+    some seeds a verifier that contradicts the generator it is judged against.
     """
     valid = list_valid_verifiers(task)
     if not valid:
@@ -129,10 +136,14 @@ def pick_verifier(
         return pinned
 
     index = None
-    for preferred in PREFERRED_SLOTS:
-        index = next((i for i, (slot, _) in enumerate(valid) if slot == preferred), None)
-        if index is not None:
-            break
+    canon = csv_selected_slot_for_task(task.task_id)
+    if canon is not None:
+        index = next((i for i, (slot, _) in enumerate(valid) if slot == canon), None)
+    if index is None:
+        for preferred in PREFERRED_SLOTS:
+            index = next((i for i, (slot, _) in enumerate(valid) if slot == preferred), None)
+            if index is not None:
+                break
     if index is None:
         index = rng.randrange(len(valid))
     pin_verifier(task.task_id, index)
