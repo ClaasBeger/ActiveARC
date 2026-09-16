@@ -17,8 +17,12 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-if [ -n "$(git status --porcelain)" ]; then
-    echo "Working tree is dirty. Commit or set aside your changes first." >&2
+# Tracked changes only, which is what filter-branch itself refuses to run over.
+# Not `git status --porcelain`: this repo carries hundreds of megabytes of
+# untracked experiment output, and none of it is in filter-branch's way.
+if ! git diff-index --quiet HEAD --; then
+    echo "You have uncommitted changes to tracked files." >&2
+    echo "Commit them or set them aside, then re-run." >&2
     exit 1
 fi
 
