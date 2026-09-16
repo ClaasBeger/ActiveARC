@@ -126,8 +126,13 @@ STUDENT_TOOLS: List[Dict[str, Any]] = [SUBMIT_PREDICTION_TOOL]
 
 
 def teacher_tools_for(session: InverseQuerySession) -> List[Dict[str, Any]]:
-    """The teacher's tools; the implementation lookup only where there is one to fetch."""
-    tools = list(TEACHER_TOOLS)
+    """The teacher's tools; the implementation lookup only where there is one to fetch.
+
+    With probing disabled the student-query tool is withheld rather than merely
+    discouraged, so a teacher cannot spend turns discovering it is unavailable.
+    """
+    tools = [t for t in TEACHER_TOOLS
+             if session.allow_probes or t["name"] != "query_student"]
     if session.implementation_available():
         tools.append(GET_VERIFIER_IMPLEMENTATION_TOOL)
     return tools

@@ -46,6 +46,14 @@ class InverseQuerySession:
     exam_index: int = 0
     n_show_example: int = 0
     n_show_transformed: int = 0
+    # Matched-K teaching: stop at exactly this many demonstrations so the set the
+    # teacher hands over is the same size as the authored one the static arm gets.
+    max_demonstrations: Optional[int] = None
+    # Probing the student is off in the matched comparison: the ARC author who
+    # wrote the authored demos could not question a particular learner either,
+    # and the set is scored afterwards by a common evaluator, so adapting to one
+    # student's replies would measure something else.
+    allow_probes: bool = True
     n_query_student: int = 0
     n_failed_show: int = 0
     # Free lookups of the verifier's implementation (ConceptARC): logged, not scored.
@@ -125,6 +133,16 @@ class InverseQuerySession:
         """Show an authored pair if it matches gold; otherwise return gold to the teacher."""
         if self.phase != "teach":
             return {"ok": False, "error": "show_example is only valid before the exam."}
+        if (self.max_demonstrations is not None
+                and len(self.demonstrations) >= self.max_demonstrations):
+            return {
+                "ok": False,
+                "error": (
+                    f"All {self.max_demonstrations} demonstrations have been shown. "
+                    "The teaching set is complete."
+                ),
+                "budget_spent": True,
+            }
         try:
             inp = _parse_grid(input_grid)
             pred = _parse_grid(output_grid)
@@ -160,6 +178,16 @@ class InverseQuerySession:
             return {
                 "ok": False,
                 "error": "show_transformed_input is only valid before the exam.",
+            }
+        if (self.max_demonstrations is not None
+                and len(self.demonstrations) >= self.max_demonstrations):
+            return {
+                "ok": False,
+                "error": (
+                    f"All {self.max_demonstrations} demonstrations have been shown. "
+                    "The teaching set is complete."
+                ),
+                "budget_spent": True,
             }
         try:
             inp = _parse_grid(input_grid)

@@ -210,7 +210,23 @@ def run_one(client, args, task_id: str) -> Dict[str, Any]:
     task = load_official(args.dataset, task_id)
     tests = list(zip(task.test_inputs, task.test_outputs))
     train_pairs = task.train_pairs
-    if args.pair_source == "generator":
+    if args.pair_source == "teacher":
+        from framework.grids import GridPair
+        if not args.teacher_demos:
+            return {"task_id": task_id, "error": "--pair-source teacher needs --teacher-demos"}
+        src = Path(args.teacher_demos) / f"{_output_basename(task_id)}.json"
+        if not src.is_file():
+            return {"task_id": task_id, "error": f"no teacher demos at {src}"}
+        rec = json.loads(src.read_text(encoding="utf-8"))
+        if "error" in rec:
+            return {"task_id": task_id, "error": f"teacher run failed: {rec['error'][:120]}"}
+        demos = rec.get("demonstrations") or []
+        want = len(task.train_pairs) if args.n_pairs in (None, "auto") else int(args.n_pairs)
+        if len(demos) < want:
+            return {"task_id": task_id, "error": "incomplete teacher set",
+                    "n_pairs_wanted": want, "n_pairs_got": len(demos)}
+        train_pairs = [GridPair(d["input"], d["output"]) for d in demos[:want]]
+    elif args.pair_source == "generator":
         n = len(task.train_pairs) if args.n_pairs in (None, "auto") else int(args.n_pairs)
         train_pairs = _generator_pairs(args, task_id, n)
         if len(train_pairs) < n:
@@ -251,10 +267,13 @@ def main() -> None:
     p.add_argument("--model", type=str, default=None)
     p.add_argument("--provider", choices=list(PROVIDERS), default=None,
                    help="Default: inferred from --model, else openai.")
-    p.add_argument("--pair-source", choices=["official", "generator"], default="official",
+    p.add_argument("--teacher-demos", type=str, default=None,
+                   help="With --pair-source teacher: directory of run_teacher_demos output.")
+    p.add_argument("--pair-source", choices=["official", "generator", "teacher"], default="official",
                    help="'generator' replaces the authored training pairs with the same "
                         "number drawn at random from the task's generator -- the random "
-                        "arm of the matched-K comparison.")
+                        "arm of the matched-K comparison. 'teacher' reads a set a "
+                        "rule-aware teacher chose, from --teacher-demos.")
     p.add_argument("--n-pairs", type=str, default="auto",
                    help="With --pair-source generator: how many pairs to draw "
                         "(default 'auto' = the task's own training-pair count).")
