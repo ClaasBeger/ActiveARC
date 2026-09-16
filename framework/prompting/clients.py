@@ -154,8 +154,9 @@ def build_client(provider: str) -> Any:
             api_key=api_key,
             base_url=OPENROUTER_BASE_URL,
             default_headers=_OPENROUTER_HEADERS,
+            max_retries=_MAX_RETRIES,
         )
-    return OpenAI(api_key=api_key)
+    return OpenAI(api_key=api_key, max_retries=_MAX_RETRIES)
 
 
 def reasoning_extra_body(
@@ -186,11 +187,15 @@ _UPSTREAM_PROVIDER = {
     "google": "google-ai-studio",
     "anthropic": "anthropic",
     "openai": "openai",
-    # DeepSeek publishes ~19 upstreams and the first-party one 404s here. Relace
-    # and DeepInfra both pin cleanly; they differ in how much they think (1,080
-    # vs 3,000 reasoning tokens on the same first turn), so which one served a
-    # run belongs in the record.
-    "deepseek": "Relace",
+    # DeepSeek publishes ~19 upstreams and the first-party one 404s here.
+    # Relace, DeepInfra, Together, Novita and Fireworks all pin cleanly, but
+    # they are not interchangeable: they differ in how much the model thinks
+    # (1,080 vs 3,000 reasoning tokens on the same first turn), so a run wants
+    # one of them throughout and the record says which. DeepInfra over Relace
+    # because Relace throttles hardest on the shared free pool -- it answered a
+    # burst at 7.4s a call against DeepInfra's 2.1s, and 429'd a real run
+    # outright.
+    "deepseek": "DeepInfra",
     "moonshotai": "Moonshot AI",
     "x-ai": "xAI",
     # Inkling has no first-party endpoint at all: DeepInfra, BaseTen and Together
@@ -223,6 +228,12 @@ def upstream_is_first_party(model: str) -> bool:
 # trials of one experiment can be answered by different serving stacks with
 # different quantisation and different reasoning handling.
 ROUTING_OVERRIDE_ENV = "ACTIVEARC_UPSTREAM"
+
+# A shared upstream pool throttles in bursts, and a 429 that the SDK gives up on
+# becomes an error record for a task that was fine -- the run then has holes that
+# only a second pass fills. The SDK default is 2 tries; this rides out a longer
+# squeeze, with the SDK's own exponential backoff between attempts.
+_MAX_RETRIES = int(os.environ.get("ACTIVEARC_MAX_RETRIES", "8"))
 
 
 def responses_extras(
