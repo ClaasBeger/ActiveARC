@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from framework.active_arc import test_phase
 from framework.active_arc.headless_trial import ActiveArcTrialSession
 from framework.prompting.active_arc_tools import responses_tools_for_phase
+from framework.prompting.clients import responses_extras
 from framework.prompting.response_logging import summarize_response
 
 
@@ -58,8 +59,7 @@ def run_branched_test(
             kwargs: Dict[str, Any] = {
                 "model": model, "tools": tools, "store": store, **convo.create_kwargs()
             }
-            if reasoning_effort is not None:
-                kwargs["reasoning"] = {"effort": reasoning_effort}
+            kwargs.update(responses_extras(convo.provider, model, reasoning_effort))
             response = client.responses.create(**kwargs)
             calls = [i for i in (getattr(response, "output", None) or [])
                      if _item_type(i) == "function_call"]

@@ -20,6 +20,7 @@ from framework.prompting.clients import (
     PROVIDER_OPENAI,
     ResponsesConversation,
     resolve_store,
+    responses_extras,
 )
 from framework.prompting.response_logging import summarize_response, usage_totals
 
@@ -166,8 +167,7 @@ def predict_from_evidence(
             "store": store,
             **convo.create_kwargs(),
         }
-        if reasoning_effort is not None:
-            kwargs["reasoning"] = {"effort": reasoning_effort}
+        kwargs.update(responses_extras(provider, model, reasoning_effort))
         response = client.responses.create(**kwargs)
         calls = [it for it in (getattr(response, "output", None) or [])
                  if _output_item_type(it) == "function_call"]

@@ -36,6 +36,7 @@ from framework.prompting.clients import (
     resolve_model,
     resolve_provider,
     resolve_store,
+    responses_extras,
 )
 from framework.prompting.response_logging import summarize_response, usage_totals
 
@@ -94,8 +95,7 @@ def run_teacher_exam(
                 "model": model, "tools": STUDENT_TOOLS, "store": store,
                 **convo.create_kwargs(),
             }
-            if reasoning_effort is not None:
-                kwargs["reasoning"] = {"effort": reasoning_effort}
+            kwargs.update(responses_extras(provider, model, reasoning_effort))
             response = client.responses.create(**kwargs)
             calls = [i for i in (getattr(response, "output", None) or [])
                      if _item_type(i) == "function_call"]
@@ -164,8 +164,9 @@ def collect_teacher_demos(
             "store": store,
             **convo.create_kwargs(),
         }
-        if reasoning_effort is not None:
-            kwargs["reasoning"] = {"effort": reasoning_effort}
+        kwargs.update(
+            responses_extras(resolved_provider, resolved_model, reasoning_effort)
+        )
         response = client.responses.create(**kwargs)
         calls = [i for i in (getattr(response, "output", None) or [])
                  if _item_type(i) == "function_call"]

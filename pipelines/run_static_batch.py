@@ -43,6 +43,7 @@ from framework.prompting.clients import (  # noqa: E402
     resolve_model,
     resolve_provider,
     resolve_store,
+    responses_extras,
 )
 from framework.prompting.response_logging import summarize_response, usage_totals  # noqa: E402
 from pipelines.run_active_arc_batch import _output_basename, _task_ids  # noqa: E402
@@ -147,8 +148,7 @@ def study_and_answer(client, train_pairs, items, *, model: str,
     study_transcript: List[Dict[str, Any]] = []
 
     kwargs: Dict[str, Any] = {"model": model, "store": store, **base.create_kwargs()}
-    if reasoning_effort is not None:
-        kwargs["reasoning"] = {"effort": reasoning_effort}
+    kwargs.update(responses_extras(provider, model, reasoning_effort))
     response = client.responses.create(**kwargs)
     study_transcript.append({
         "turn": 0, "phase": "study", "response_id": response.id,
@@ -169,8 +169,7 @@ def study_and_answer(client, train_pairs, items, *, model: str,
         for turn in range(max_turns):
             kwargs = {"model": model, "tools": STUDENT_TOOLS, "store": store,
                       **convo.create_kwargs()}
-            if reasoning_effort is not None:
-                kwargs["reasoning"] = {"effort": reasoning_effort}
+            kwargs.update(responses_extras(provider, model, reasoning_effort))
             response = client.responses.create(**kwargs)
             calls = [it for it in (getattr(response, "output", None) or [])
                      if _output_item_type(it) == "function_call"]
@@ -235,8 +234,7 @@ def predict(client, train_pairs, test_input, *, test_index: int, n_tests: int, m
     for turn in range(max_turns):
         kwargs: Dict[str, Any] = {"model": model, "tools": STUDENT_TOOLS, "store": store,
                                   **convo.create_kwargs()}
-        if reasoning_effort is not None:
-            kwargs["reasoning"] = {"effort": reasoning_effort}
+        kwargs.update(responses_extras(provider, model, reasoning_effort))
         response = client.responses.create(**kwargs)
         calls = [it for it in (getattr(response, "output", None) or []) if _output_item_type(it) == "function_call"]
         log = {"turn": turn, "response_id": response.id, "response": summarize_response(response),
@@ -385,6 +383,10 @@ def run_one(client, args, task_id: str) -> Dict[str, Any]:
         "setting": "static",
         "task_id": task_id, "dataset": args.dataset, "backend": "responses",
         "model": args.model, "reasoning_effort": args.reasoning_effort,
+        "provider": args.provider,
+        "provider_routing": responses_extras(
+            args.provider, args.model, args.reasoning_effort
+        ).get("extra_body", {}).get("provider"),
         "n_train": len(task.train_pairs), "n_test": len(tests),
         "test_item_kinds": kinds,
         "test_item_correct": [bool(it["correct"]) for it in items],

@@ -176,9 +176,72 @@ def reasoning_extra_body(
     return {"reasoning": {"effort": reasoning_effort}}
 
 
-# OpenRouter's id for the vendor's own first-party endpoint, where the id prefix
-# is not already it.
-_UPSTREAM_PROVIDER = {"google": "google-ai-studio"}
+# The upstream to pin per model-id prefix. Most vendors serve their own models
+# under a name close to the prefix, but that is a convention rather than a rule:
+# Google's endpoint is "google-ai-studio", and DeepSeek's own endpoint is listed
+# yet not routable on this account, so its models are served by third parties.
+# A wrong name is not a silent fallback -- OpenRouter answers 404 "no endpoints
+# found" -- so the mapping is checked rather than guessed.
+_UPSTREAM_PROVIDER = {
+    "google": "google-ai-studio",
+    "anthropic": "anthropic",
+    "openai": "openai",
+    # DeepSeek publishes ~19 upstreams and the first-party one 404s here. Relace
+    # and DeepInfra both pin cleanly; they differ in how much they think (1,080
+    # vs 3,000 reasoning tokens on the same first turn), so which one served a
+    # run belongs in the record.
+    "deepseek": "Relace",
+    "moonshotai": "Moonshot AI",
+    "x-ai": "xAI",
+    # Inkling has no first-party endpoint at all: DeepInfra, BaseTen and Together
+    # serve it.
+    "thinkingmachines": "DeepInfra",
+}
+
+# Whether the pinned upstream is the model vendor's own endpoint. It is not a
+# routing concern -- every pin above is verified to route -- but a result served
+# by a third party is a different provenance claim than one served by the vendor,
+# and that belongs in the write-up rather than in someone's memory.
+FIRST_PARTY_UPSTREAM = {
+    "anthropic": True,
+    "google": True,
+    "openai": True,
+    "x-ai": True,
+    "moonshotai": True,
+    "deepseek": False,        # DeepSeek's own endpoint is listed but 404s here
+    "thinkingmachines": False,  # no first-party endpoint exists
+}
+
+
+def upstream_is_first_party(model: str) -> bool:
+    """Whether the pinned upstream for *model* is the vendor's own endpoint."""
+    vendor = model.split("/", 1)[0] if "/" in model else model
+    return bool(FIRST_PARTY_UPSTREAM.get(vendor, False))
+
+
+# Pinning matters more the more upstreams a model has: unpinned, successive
+# trials of one experiment can be answered by different serving stacks with
+# different quantisation and different reasoning handling.
+ROUTING_OVERRIDE_ENV = "ACTIVEARC_UPSTREAM"
+
+
+def responses_extras(
+    provider: str, model: str, reasoning_effort: Optional[str]
+) -> Dict[str, Any]:
+    """The per-request extras a Responses call needs: thinking budget and pin.
+
+    Every loop used to spell the reasoning block out inline and none of them
+    sent a provider order, so an OpenRouter run was pinned in the chat arm and
+    unpinned everywhere else -- the static and teacher arms could be served by a
+    different upstream on every trial. Both belong to the same decision, so they
+    are built in one place.
+    """
+    extras: Dict[str, Any] = {}
+    if reasoning_effort is not None:
+        extras["reasoning"] = {"effort": reasoning_effort}
+    if provider == PROVIDER_OPENROUTER:
+        extras["extra_body"] = {"provider": provider_routing(model)}
+    return extras
 
 
 def provider_routing(model: str) -> Dict[str, Any]:
@@ -189,8 +252,18 @@ def provider_routing(model: str) -> Dict[str, Any]:
     with different reasoning-serialization behaviour. An experiment wants one
     known upstream, and no silent fallback to another.
     """
+    override = os.environ.get(ROUTING_OVERRIDE_ENV)
+    if override:
+        return {"order": [override], "allow_fallbacks": False}
     vendor = model.split("/", 1)[0] if "/" in model else model
-    upstream = _UPSTREAM_PROVIDER.get(vendor, vendor)
+    upstream = _UPSTREAM_PROVIDER.get(vendor)
+    if upstream is None:
+        raise RuntimeError(
+            f"No upstream pin known for {model!r}. Add its provider to "
+            f"_UPSTREAM_PROVIDER, or set {ROUTING_OVERRIDE_ENV}. Guessing the "
+            "name gives a 404, and running unpinned lets different trials be "
+            "answered by different serving stacks."
+        )
     return {"order": [upstream], "allow_fallbacks": False}
 
 
@@ -261,6 +334,7 @@ class ResponsesConversation:
     _REASONING_WINDOW = {PROVIDER_OPENROUTER: 1}
 
     def __init__(self, provider: str, opening: list) -> None:
+        self.provider = provider
         self.chaining = uses_response_chaining(provider)
         self._convo: list = list(opening)
         self._pending: list = list(opening)
@@ -352,6 +426,7 @@ class ResponsesConversation:
         makes the server-side branch; replayed conversations copy the list.
         """
         other = object.__new__(ResponsesConversation)
+        other.provider = self.provider
         other.chaining = self.chaining
         other._convo = list(self._convo)
         other._pending = list(self._pending)

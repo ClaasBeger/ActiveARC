@@ -30,6 +30,7 @@ from framework.prompting.clients import (
     resolve_model,
     resolve_provider,
     resolve_store,
+    responses_extras,
 )
 from framework.prompting.response_logging import summarize_response, usage_totals
 
@@ -174,8 +175,7 @@ def _run_prediction(
             "store": store,
             **convo.create_kwargs(),
         }
-        if reasoning_effort is not None:
-            create_kwargs["reasoning"] = {"effort": reasoning_effort}
+        create_kwargs.update(responses_extras(provider, model, reasoning_effort))
         response = client.responses.create(**create_kwargs)
         function_calls = [
             item
@@ -366,8 +366,8 @@ def run_inverse_query_responses_loop(
             "store": teacher_store,
             **teacher_convo.create_kwargs(),
         }
-        if reasoning_effort is not None:
-            create_kwargs["reasoning"] = {"effort": reasoning_effort}
+        create_kwargs.update(responses_extras(
+            resolved_teacher_provider, resolved_teacher, reasoning_effort))
         response = teacher_client.responses.create(**create_kwargs)
         function_calls = [
             item

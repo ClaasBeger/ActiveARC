@@ -28,6 +28,7 @@ from framework.prompting.clients import (
     resolve_model,
     resolve_provider,
     resolve_store,
+    responses_extras,
     supports_responses_api,
 )
 from framework.prompting.branch_test import run_branched_test
@@ -120,8 +121,9 @@ def run_active_arc_responses_loop(
             "store": store,
             **convo.create_kwargs(),
         }
-        if reasoning_effort is not None:
-            create_kwargs["reasoning"] = {"effort": reasoning_effort}
+        create_kwargs.update(
+            responses_extras(resolved_provider, resolved_model, reasoning_effort)
+        )
 
         response = client.responses.create(**create_kwargs)
         response_log = summarize_response(response)
