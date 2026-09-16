@@ -31,7 +31,9 @@ if str(ROOT_DIR) not in sys.path:
 
 from framework.inverse_query.session import create_inverse_query_session
 from framework.prompting.clients import PROVIDERS, resolve_target
-from framework.prompting.teacher_demos import collect_teacher_demos
+from framework.prompting.clients import build_client, resolve_model, resolve_provider, resolve_store
+from framework.prompting.teacher_demos import collect_teacher_demos, run_teacher_exam
+from framework.tasks.eval_items import sampled_item
 from pipelines.run_active_arc_batch import _is_completed_record, _output_basename, _task_ids
 from pipelines.run_static_batch import load_official
 
@@ -64,6 +66,14 @@ def _parse_args() -> argparse.Namespace:
         help="Let the teacher query a student before choosing (default: off). Off keeps "
         "the teacher's information equal to the ARC author's, who had no learner to ask.",
     )
+    p.add_argument(
+        "--exam",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Check the teacher on the items the solver will face before it teaches, "
+        "then reset its context (default: on). A teacher that fails did not have "
+        "the rule, so its set says nothing about how a rule-aware model chooses.",
+    )
     p.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=True)
     return p.parse_args()
 
@@ -81,6 +91,28 @@ def _run_one(args: argparse.Namespace, task_id: str) -> dict:
     )
     session.max_demonstrations = n
     session.allow_probes = bool(args.probes)
+
+    effort = None if args.reasoning_effort.lower() == "none" else args.reasoning_effort
+    exam = None
+    if args.exam:
+        task = load_official(args.dataset, task_id)
+        items = list(zip(task.test_inputs, task.test_outputs))
+        got = sampled_item(args.dataset, args.seed, task_id)
+        if got is not None:
+            items.append((got[0], got[1]))
+        provider = resolve_provider(args.provider, args.model)
+        exam = run_teacher_exam(
+            build_client(provider), session, items,
+            model=resolve_model(provider, args.model), provider=provider,
+            reasoning_effort=effort, store=resolve_store(provider, True),
+        )
+        # Teaching starts from a fresh session: nothing of the exam carries over.
+        session = create_inverse_query_session(
+            seed=args.seed, task_id=task_id, dataset=args.dataset,
+        )
+        session.max_demonstrations = n
+        session.allow_probes = bool(args.probes)
+
     result = collect_teacher_demos(
         session,
         model=args.model,
@@ -95,6 +127,8 @@ def _run_one(args: argparse.Namespace, task_id: str) -> dict:
         "seed": args.seed,
         "n_demos_target": n,
         "probes_allowed": bool(args.probes),
+        "teacher_exam": exam,
+        "teacher_exam_passed": (exam or {}).get("passed"),
         **result,
     }
 
@@ -136,9 +170,12 @@ def main() -> None:
             out_path.write_text(json.dumps(rec, indent=2), encoding="utf-8")
             rows.append({"task_id": task_id, "ok": True,
                          "n_demonstrations": rec["n_demonstrations"],
-                         "target": rec["n_demos_target"], "reason": rec["reason"]})
+                         "target": rec["n_demos_target"], "reason": rec["reason"],
+                         "exam_passed": rec.get("teacher_exam_passed")})
+            ex = rec.get("teacher_exam") or {}
+            exs = f" exam={ex.get('n_correct')}/{ex.get('n_items')}" if ex else ""
             print(f"  ok demos={rec['n_demonstrations']}/{rec['n_demos_target']} "
-                  f"failed_shows={rec['n_failed_show']} reason={rec['reason']}", flush=True)
+                  f"failed_shows={rec['n_failed_show']}{exs} reason={rec['reason']}", flush=True)
         except Exception as e:
             err = f"{type(e).__name__}: {e}"
             out_path.write_text(json.dumps({
@@ -156,6 +193,8 @@ def main() -> None:
         "n_error": sum(1 for r in rows if r.get("ok") is False),
         "n_complete_sets": sum(1 for r in rows if r.get("ok")
                                and r.get("n_demonstrations") == r.get("target")),
+        "n_exam_passed": sum(1 for r in rows if r.get("exam_passed")),
+        "n_exam_failed": sum(1 for r in rows if r.get("ok") and r.get("exam_passed") is False),
         "rows": rows,
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")

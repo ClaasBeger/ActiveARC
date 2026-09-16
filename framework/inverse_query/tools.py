@@ -131,8 +131,13 @@ def teacher_tools_for(session: InverseQuerySession) -> List[Dict[str, Any]]:
     With probing disabled the student-query tool is withheld rather than merely
     discouraged, so a teacher cannot spend turns discovering it is unavailable.
     """
+    matched = session.max_demonstrations is not None
     tools = [t for t in TEACHER_TOOLS
-             if session.allow_probes or t["name"] != "query_student"]
+             if (session.allow_probes or t["name"] != "query_student")
+             # In the matched comparison the teacher chooses inputs only: the
+             # environment supplies every output, so the pairs differ between arms
+             # in which inputs were picked and in nothing else.
+             and not (matched and t["name"] in ("show_example", "start_exam"))]
     if session.implementation_available():
         tools.append(GET_VERIFIER_IMPLEMENTATION_TOOL)
     return tools

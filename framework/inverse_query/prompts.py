@@ -57,6 +57,54 @@ def _clip(text: Optional[str], limit: int = 80_000) -> Optional[str]:
     return text[:limit] + f"\n\n# ... truncated ({len(text)} chars total)"
 
 
+def matched_teacher_developer_prompt(session: "InverseQuerySession") -> str:
+    """Brief for the matched comparison: choose K demonstrations, nothing else.
+
+    Says what the setting is and what is scored, and stops there. It does not say
+    what makes a demonstration useful -- no mention of diversity, coverage, edge
+    cases or disambiguating the rule -- because how a rule-aware model chooses is
+    the thing being measured, and naming it would measure the prompt instead.
+    """
+    k = session.max_demonstrations
+    return "\n".join([
+        "You are dealing with grid transformation tasks: an input grid is mapped "
+        "to an output grid according to an underlying rule.",
+        "Grids are rectangular matrices with integer colors 0-9.",
+        "",
+        "You are given the rule in words, the verifier program that implements it, "
+        f"and one input-output example. Your job is to assemble exactly {k} "
+        "demonstration pairs of this rule.",
+        "",
+        f"Those pairs are then given to a separate solver that has never seen this "
+        f"task. It sees your {k} pairs and nothing else: not the rule, not the "
+        "verifier program, not the example you were given, and nothing you write in "
+        "prose. From them alone it must infer the rule and apply it to held-out "
+        "inputs of this task. Whether it answers those correctly is what is scored.",
+        "",
+        "Use show_transformed_input to add a pair: you author the input and the "
+        "environment computes the output. An input the verifier cannot evaluate is "
+        "refused and no pair is added; you may submit a different one.",
+    ])
+
+
+def matched_teacher_exam_message(input_grid: List[List[int]],
+                                 index: int, n_items: int) -> str:
+    """One held-out item for the teacher to answer before it teaches.
+
+    The teacher is checked on the items the solver will face, so a set produced by
+    a teacher that does not have the rule can be told apart from a badly chosen
+    one. Its context is reset afterwards: knowing the items while teaching would
+    let it demonstrate toward them rather than toward the rule.
+    """
+    payload = {"item": index + 1, "n_items": n_items, "input": clone_grid(input_grid)}
+    return (
+        "Before you teach: apply the rule to this input yourself and submit the "
+        "output with submit_prediction. This checks that you have the rule; you "
+        "will not keep this exchange."
+        + "\n\n```json\n" + _dumps(payload) + "\n```"
+    )
+
+
 def teacher_developer_prompt(session: InverseQuerySession) -> str:
     n = session.exam_n
     lines = [

@@ -16,9 +16,19 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from framework.inverse_query.prompts import teacher_developer_prompt, teacher_task_message
+from framework.inverse_query.prompts import (
+    matched_teacher_developer_prompt,
+    matched_teacher_exam_message,
+    teacher_task_message,
+)
 from framework.inverse_query.session import InverseQuerySession
-from framework.inverse_query.tools import execute_teacher_tool, teacher_tools_for
+from framework.inverse_query.tools import (
+    STUDENT_TOOLS,
+    execute_teacher_tool,
+    parse_student_prediction,
+    teacher_tools_for,
+)
+from framework.grids import is_equal_grid
 from framework.prompting.clients import (
     PROVIDER_OPENAI,
     ResponsesConversation,
@@ -48,6 +58,79 @@ def _assistant_text(response: Any) -> Optional[str]:
     return t if isinstance(t, str) and t.strip() else None
 
 
+
+def run_teacher_exam(
+    client: Any,
+    session: InverseQuerySession,
+    items: List[tuple],
+    *,
+    model: str,
+    provider: str,
+    reasoning_effort: Optional[str],
+    store: bool,
+    max_turns: int = 6,
+) -> Dict[str, Any]:
+    """Have the teacher answer the solver's own held-out items, before teaching.
+
+    Each item gets its own context, and none of it survives into the teaching
+    phase: a teacher that remembered these would demonstrate toward them rather
+    than toward the rule, which is teaching to the test rather than teaching.
+
+    A teacher that fails here did not have the rule, so its demonstrations say
+    nothing about how a rule-aware model chooses -- those trials want reporting
+    apart from the rest rather than averaging in.
+    """
+    results: List[Dict[str, Any]] = []
+    transcripts: List[Dict[str, Any]] = []
+    for idx, (test_input, gold) in enumerate(items):
+        convo = ResponsesConversation(provider, [
+            {"role": "developer", "content": matched_teacher_developer_prompt(session)},
+            {"role": "user", "content": teacher_task_message(session)},
+            {"role": "user", "content": matched_teacher_exam_message(test_input, idx, len(items))},
+        ])
+        prediction = None
+        for turn in range(max_turns):
+            kwargs: Dict[str, Any] = {
+                "model": model, "tools": STUDENT_TOOLS, "store": store,
+                **convo.create_kwargs(),
+            }
+            if reasoning_effort is not None:
+                kwargs["reasoning"] = {"effort": reasoning_effort}
+            response = client.responses.create(**kwargs)
+            calls = [i for i in (getattr(response, "output", None) or [])
+                     if _item_type(i) == "function_call"]
+            transcripts.append({"item": idx, "turn": turn,
+                                "response": summarize_response(response),
+                                "assistant": _assistant_text(response)})
+            convo.record_turn(response, [_call_fields(c) for c in calls],
+                              assistant_text=_assistant_text(response))
+            if not calls:
+                convo.extend([{"role": "user", "content":
+                               "Submit the output grid with submit_prediction."}])
+                continue
+            outs = []
+            done = False
+            for c in calls:
+                call_id, name, arguments = _call_fields(c)
+                parsed = parse_student_prediction(arguments) if name == "submit_prediction" \
+                    else {"ok": False, "error": f"Unknown tool: {name}"}
+                if parsed.get("ok"):
+                    prediction = parsed["grid"]
+                    done = True
+                    parsed = {"ok": True, "recorded": True}
+                outs.append({"type": "function_call_output", "call_id": call_id,
+                             "output": json.dumps(parsed)})
+            convo.extend(outs)
+            if done:
+                break
+        correct = prediction is not None and is_equal_grid(prediction, gold)
+        results.append({"item": idx, "correct": bool(correct),
+                        "answered": prediction is not None})
+    passed = bool(results) and all(r["correct"] for r in results)
+    return {"items": results, "n_correct": sum(1 for r in results if r["correct"]),
+            "n_items": len(results), "passed": passed, "transcript": transcripts}
+
+
 def collect_teacher_demos(
     session: InverseQuerySession,
     *,
@@ -64,7 +147,7 @@ def collect_teacher_demos(
     store = resolve_store(resolved_provider, store)
 
     convo = ResponsesConversation(resolved_provider, [
-        {"role": "developer", "content": teacher_developer_prompt(session)},
+        {"role": "developer", "content": matched_teacher_developer_prompt(session)},
         {"role": "user", "content": teacher_task_message(session)},
     ])
     transcript: List[Dict[str, Any]] = []
