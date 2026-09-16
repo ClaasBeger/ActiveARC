@@ -26,6 +26,39 @@ Phase = Literal["explore", "test", "done"]
 INVALID_INPUT_OR_RULE_MESSAGE = "Invalid Input Grid or Rule not Applicable"
 
 
+
+def malformed_grid_message(grid: Any) -> Optional[str]:
+    """Say what is wrong with the *shape* of a submitted grid, or None if it is fine.
+
+    The generic INVALID_INPUT_OR_RULE_MESSAGE is deliberately vague because it
+    also covers a verifier refusing a query, and saying why would leak the rule.
+    The shape of the grid the model just wrote leaks nothing, so describing it
+    costs nothing and saves a turn: a model told "rows have widths 9, 10, 11"
+    can fix that, where one told "invalid input" usually submits the same grid
+    again. Luna lost roughly a third of its turns this way.
+    """
+    if not isinstance(grid, list) or not grid:
+        return "Grid must be a non-empty list of rows."
+    if not all(isinstance(r, list) for r in grid):
+        return "Grid must be a list of rows, each row a list of integers."
+    widths = sorted({len(r) for r in grid})
+    if widths == [0]:
+        return "Grid rows must be non-empty."
+    if len(widths) > 1:
+        return (
+            "Grid must be rectangular: every row needs the same number of cells, "
+            f"but the rows have widths {', '.join(str(w) for w in widths)}. "
+            "Re-send the grid with all rows the same length."
+        )
+    for row in grid:
+        for cell in row:
+            if isinstance(cell, bool) or not isinstance(cell, int):
+                return f"Grid cells must be integers 0-9; found {cell!r}."
+            if not 0 <= cell <= 9:
+                return f"Grid cells must be integers 0-9; found {cell}."
+    return None
+
+
 def normalize_query_grid(grid: Grid) -> Grid:
     return [
         [max(0, min(9, int(round(float(c))))) for c in row]
@@ -230,6 +263,9 @@ class ActiveArcTrialSession:
                 "ok": False,
                 "error": f"submit_query is only valid in explore phase (now: {self.phase}).",
             }
+        shape_error = malformed_grid_message(grid)
+        if shape_error is not None:
+            return {"ok": False, "error": shape_error, "malformed_grid": True}
         try:
             inp = normalize_query_grid(clone_grid(grid))
             validate_grid(inp)
@@ -495,6 +531,9 @@ class ActiveArcTrialSession:
 
         preds: List[Grid] = []
         for a in answers:
+            shape_error = malformed_grid_message(a)
+            if shape_error is not None:
+                return {"ok": False, "error": shape_error, "malformed_grid": True}
             try:
                 pred = normalize_query_grid(clone_grid(a))
                 validate_grid(pred)

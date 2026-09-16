@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 from framework.active_arc.headless_trial import (
     INVALID_INPUT_OR_RULE_MESSAGE,
     ActiveArcTrialSession,
+    malformed_grid_message,
     normalize_query_grid,
 )
 from framework.grids import Grid, clone_grid, is_equal_grid, validate_grid
@@ -43,6 +44,9 @@ def score_answer(session: ActiveArcTrialSession, index: int, grid: Any) -> Dict[
     items = session.test_items
     if index >= len(items):
         return {"ok": False, "error": "No such test item."}
+    shape_error = malformed_grid_message(grid)
+    if shape_error is not None:
+        return {"ok": False, "error": shape_error, "malformed_grid": True}
     try:
         pred = normalize_query_grid(clone_grid(grid))
         validate_grid(pred)
