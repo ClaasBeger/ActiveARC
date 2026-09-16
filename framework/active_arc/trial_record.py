@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from framework.active_arc.headless_trial import ActiveArcTrialSession
+from framework.prompting.clients import reasoning_carry
 from framework.grids import clone_grid
 
 
@@ -37,6 +38,9 @@ def build_trial_record(
         "dataset": dataset,
         "backend": result.get("backend"),
         "provider": result.get("provider"),
+        "reasoning_carry": (
+            reasoning_carry(result["provider"]) if result.get("provider") else None
+        ),
         "model": result.get("model"),
         "reasoning_effort": result.get("reasoning_effort"),
         "flags": {

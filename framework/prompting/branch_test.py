@@ -155,6 +155,7 @@ def run_branched_test_chat(
                                 "arguments": (c.get("function") or {}).get("arguments")}
                                for c in calls],
                 "tool_results": [],
+                "n_reasoning_details": len(msg.get("reasoning_details") or []),
                 "usage": chat_usage_to_responses_shape(payload.get("usage")),
             }
             transcript.append(log)

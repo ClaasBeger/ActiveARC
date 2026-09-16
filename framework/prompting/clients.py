@@ -90,6 +90,20 @@ def uses_response_chaining(provider: str) -> bool:
     return provider == PROVIDER_OPENAI
 
 
+def reasoning_carry(provider: str) -> str:
+    """How a provider keeps the model's thinking across turns.
+
+    "server_side": the chain holds it, so nothing about it appears in the
+    request and a per-turn count of replayed reasoning blocks is meaningless.
+    "replayed": it rides in the conversation we resend, so the count is real
+    and a zero there would mean the thinking was dropped.
+
+    Recorded on every trial so a reader can tell an inapplicable field from a
+    missing one without knowing which provider does which.
+    """
+    return "server_side" if uses_response_chaining(provider) else "replayed"
+
+
 def resolve_store(provider: str, store: bool) -> bool:
     """Whether the provider will keep the response.
 
