@@ -189,6 +189,23 @@ def _generator_pairs(args, task_id: str, n: int):
     return pairs
 
 
+def _is_completed_record(path) -> bool:
+    """Whether an existing per-task file holds a finished trial worth keeping.
+
+    A trial that failed is written out like any other, so treating "the file
+    exists" as "this task is done" makes a resumed batch skip exactly the tasks
+    that need redoing -- and the gap is silent, because the run reports them as
+    skipped. Only a record with no ``error`` counts as done; anything else is
+    re-run, which is what resuming after a rate limit, a timeout or an exhausted
+    balance should do without anyone having to delete files first.
+    """
+    try:
+        rec = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False        # unreadable or truncated: redo it
+    return "error" not in rec
+
+
 def run_one(client, args, task_id: str) -> Dict[str, Any]:
     task = load_official(args.dataset, task_id)
     tests = list(zip(task.test_inputs, task.test_outputs))
@@ -278,7 +295,7 @@ def main() -> None:
     t0 = time.perf_counter()
     for i, task_id in enumerate(task_ids, start=1):
         out_path = out_dir / f"{_output_basename(task_id)}.json"
-        if args.skip_existing and out_path.is_file():
+        if args.skip_existing and _is_completed_record(out_path):
             rec = json.loads(out_path.read_text(encoding="utf-8"))
             row = {"task_id": task_id, "skipped": True, "correct": rec.get("correct"), "n_test": rec.get("n_test"),
                    "n_test_correct": rec.get("n_test_correct"), "usage": rec.get("usage")}

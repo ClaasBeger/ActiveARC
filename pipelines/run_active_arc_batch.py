@@ -272,6 +272,23 @@ def _forced_k_for(args: argparse.Namespace, task_id: str) -> Optional[int]:
     return max(0, k)
 
 
+def _is_completed_record(path) -> bool:
+    """Whether an existing per-task file holds a finished trial worth keeping.
+
+    A trial that failed is written out like any other, so treating "the file
+    exists" as "this task is done" makes a resumed batch skip exactly the tasks
+    that need redoing -- and the gap is silent, because the run reports them as
+    skipped. Only a record with no ``error`` counts as done; anything else is
+    re-run, which is what resuming after a rate limit, a timeout or an exhausted
+    balance should do without anyone having to delete files first.
+    """
+    try:
+        rec = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False        # unreadable or truncated: redo it
+    return "error" not in rec
+
+
 def _run_one(args: argparse.Namespace, task_id: str) -> dict:
     forced = _forced_k_for(args, task_id)
     session = create_trial_session(
@@ -394,7 +411,7 @@ def main() -> None:
 
     for i, task_id in enumerate(task_ids, start=1):
         out_path = out_dir / f"{_output_basename(task_id)}.json"
-        if args.skip_existing and out_path.is_file():
+        if args.skip_existing and _is_completed_record(out_path):
             print(f"[{i}/{len(task_ids)}] skip existing {task_id}", flush=True)
             try:
                 existing = json.loads(out_path.read_text(encoding="utf-8"))
