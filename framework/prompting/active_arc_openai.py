@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from framework.active_arc.headless_trial import ActiveArcTrialSession
 from framework.prompting.active_arc_tools import (
     OPENAI_CHAT_TOOL_DEFINITIONS,
+    REQUEST_TEST_TOOL_NAMES,
     _system_prompt,
     build_task_user_message,
     chat_tools_for_phase,
@@ -27,6 +28,7 @@ from framework.prompting.clients import (
     resolve_model,
     resolve_provider,
 )
+from framework.prompting.branch_test import run_branched_test_chat
 from framework.prompting.response_logging import (
     chat_usage_to_responses_shape,
     usage_totals,
@@ -89,7 +91,9 @@ def run_openai_agent_loop(
             "model": resolved_model,
             "messages": messages,
             "tools": chat_tools_for_phase(
-                session.phase, program_mode=session.program_test
+                session.phase,
+                program_mode=session.program_test,
+                n_test_items=len(session.test_items) or 1,
             ),
             "tool_choice": "auto",
             "temperature": temperature,
@@ -161,6 +165,27 @@ def run_openai_agent_loop(
                         "query_count": session.query_count,
                     }
                 )
+
+            if (name in REQUEST_TEST_TOOL_NAMES and out.get("ok")
+                    and session.phase == "test" and not session.program_test):
+                # Close out request_test before branching: a branch copies this
+                # message list, and a tool_call with no reply is rejected.
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id"),
+                    "content": json.dumps(out),
+                })
+                final = run_branched_test_chat(
+                    client, session, messages, model=resolved_model,
+                    extra_body=extra_body, temperature=temperature,
+                    max_turns=8, transcript=transcript,
+                )
+                return _finish({
+                    "reason": "trial_complete",
+                    "result": final,
+                    "query_count": session.query_count,
+                    "correct": final.get("correct"),
+                })
 
             if name in ("submit_final_answer", "submit_program") and out.get("ok") and out.get("done"):
                 return _finish(

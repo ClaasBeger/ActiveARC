@@ -53,22 +53,39 @@ _REQUEST_TEST_TOOL: Dict[str, Any] = {
 # Legacy tool name from earlier protocol; still dispatched.
 REQUEST_TEST_TOOL_NAMES = frozenset({"request_test", "finish_exploration"})
 
+# One tool shape per situation rather than one tool with an optional field. A
+# schema that requires both ``grid`` and ``grids`` and expects one of them to be
+# null is a contract weaker models get wrong -- they fill ``grid``, null
+# ``grids``, and burn turns on the rejection. Exposing only the field that
+# applies leaves nothing to get wrong.
 _SUBMIT_FINAL_ANSWER_TOOL: Dict[str, Any] = {
     "type": "function",
     "name": "submit_final_answer",
     "description": (
-        "Testing stage only. Submit your predicted output grid for the test input, "
-        "each cell an integer 0-9. When the testing stage showed several inputs in "
-        "test_input_grids, pass grids instead: one output per input, in the order "
-        "they were shown."
+        "Testing stage only. Submit your predicted output grid for the test input. "
+        "Same shape as test_input_grid; each cell an integer 0-9."
     ),
     "parameters": {
         "type": "object",
-        "properties": {
-            "grid": _GRID_SCHEMA,
-            "grids": {"type": ["array", "null"], "items": _GRID_SCHEMA},
-        },
-        "required": ["grid", "grids"],
+        "properties": {"grid": _GRID_SCHEMA},
+        "required": ["grid"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+_SUBMIT_FINAL_ANSWERS_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "name": "submit_final_answer",
+    "description": (
+        "Testing stage only. The testing stage showed several inputs in "
+        "test_input_grids. Submit one predicted output grid per input, in the same "
+        "order, as grids. Each cell an integer 0-9."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {"grids": {"type": "array", "items": _GRID_SCHEMA}},
+        "required": ["grids"],
         "additionalProperties": False,
     },
     "strict": True,
@@ -103,6 +120,7 @@ RESPONSES_EXPLORATION_TOOLS: List[Dict[str, Any]] = [
     _REQUEST_TEST_TOOL,
 ]
 RESPONSES_TEST_TOOLS: List[Dict[str, Any]] = [_SUBMIT_FINAL_ANSWER_TOOL]
+RESPONSES_MULTI_TEST_TOOLS: List[Dict[str, Any]] = [_SUBMIT_FINAL_ANSWERS_TOOL]
 RESPONSES_PROGRAM_TEST_TOOLS: List[Dict[str, Any]] = [_SUBMIT_PROGRAM_TOOL]
 RESPONSES_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     *RESPONSES_EXPLORATION_TOOLS,
@@ -159,21 +177,40 @@ OPENAI_CHAT_PROGRAM_TEST_TOOLS: List[Dict[str, Any]] = [
 ]
 
 
+OPENAI_CHAT_MULTI_TEST_TOOLS: List[Dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": tool["name"],
+            "description": tool["description"],
+            "parameters": tool["parameters"],
+        },
+    }
+    for tool in RESPONSES_MULTI_TEST_TOOLS
+]
+
+
 def responses_tools_for_phase(
-    phase: str, *, program_mode: bool = False
+    phase: str, *, program_mode: bool = False, n_test_items: int = 1
 ) -> List[Dict[str, Any]]:
     """Exploration exposes query + request_test; testing exposes the answer tool.
 
     ``program_mode`` swaps ``submit_final_answer`` for ``submit_program``.
     """
     if phase == "test":
-        return RESPONSES_PROGRAM_TEST_TOOLS if program_mode else RESPONSES_TEST_TOOLS
+        if program_mode:
+            return RESPONSES_PROGRAM_TEST_TOOLS
+        return RESPONSES_MULTI_TEST_TOOLS if n_test_items > 1 else RESPONSES_TEST_TOOLS
     return RESPONSES_EXPLORATION_TOOLS
 
 
-def chat_tools_for_phase(phase: str, *, program_mode: bool = False) -> List[Dict[str, Any]]:
+def chat_tools_for_phase(
+    phase: str, *, program_mode: bool = False, n_test_items: int = 1
+) -> List[Dict[str, Any]]:
     if phase == "test":
-        return OPENAI_CHAT_PROGRAM_TEST_TOOLS if program_mode else OPENAI_CHAT_TEST_TOOLS
+        if program_mode:
+            return OPENAI_CHAT_PROGRAM_TEST_TOOLS
+        return OPENAI_CHAT_MULTI_TEST_TOOLS if n_test_items > 1 else OPENAI_CHAT_TEST_TOOLS
     return OPENAI_CHAT_EXPLORATION_TOOLS
 
 

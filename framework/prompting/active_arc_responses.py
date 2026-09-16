@@ -17,6 +17,7 @@ from framework.active_arc.headless_trial import ActiveArcTrialSession
 from framework.prompting.active_arc_tools import (
     DEFAULT_OPENAI_MODEL,  # noqa: F401  (re-exported for callers)
     build_initial_responses_input,
+    REQUEST_TEST_TOOL_NAMES,
     execute_tool_call,
     plain_text_protocol_reminder,
     responses_tools_for_phase,
@@ -29,6 +30,7 @@ from framework.prompting.clients import (
     resolve_store,
     supports_responses_api,
 )
+from framework.prompting.branch_test import run_branched_test
 from framework.prompting.response_logging import summarize_response, usage_totals
 
 
@@ -111,7 +113,9 @@ def run_active_arc_responses_loop(
         create_kwargs: Dict[str, Any] = {
             "model": resolved_model,
             "tools": responses_tools_for_phase(
-                session.phase, program_mode=session.program_test
+                session.phase,
+                program_mode=session.program_test,
+                n_test_items=len(session.test_items) or 1,
             ),
             "store": store,
             **convo.create_kwargs(),
@@ -185,6 +189,29 @@ def run_active_arc_responses_loop(
                     "message": out.get("message"),
                     "phase": out.get("phase", session.phase),
                     "query_count": session.query_count,
+                }
+                return last_result
+
+            if (name in REQUEST_TEST_TOOL_NAMES and out.get("ok")
+                    and session.phase == "test" and not session.program_test):
+                # Close out request_test before branching: a fork inherits this
+                # turn, and a function_call with no output is rejected outright.
+                convo.extend(tool_outputs + [{
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": json.dumps(out),
+                }])
+                final = run_branched_test(
+                    client, session, convo, model=resolved_model,
+                    reasoning_effort=reasoning_effort, store=store,
+                    max_turns=8, transcript=transcript,
+                )
+                last_result["usage"] = usage_totals(transcript)
+                last_result["final"] = {
+                    "reason": "trial_complete",
+                    "result": final,
+                    "query_count": session.query_count,
+                    "correct": final.get("correct"),
                 }
                 return last_result
 

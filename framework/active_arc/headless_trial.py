@@ -353,30 +353,20 @@ class ActiveArcTrialSession:
         for ti_grid, _ in items:
             self.shown_test_inputs.append((self.test_round, clone_grid(ti_grid)))
 
-        if len(items) == 1:
-            return {
-                "ok": True,
-                "test_input_grid": clone_grid(items[0][0]),
-                "phase": self.phase,
-                "test_round": self.test_round,
-                "message": (
-                    "Testing stage. Apply the same transformation rule to test_input_grid and "
-                    "submit your predicted output grid with submit_final_answer "
-                    "(JSON array of rows; each cell an integer 0–9)."
-                ),
-            }
+        # The grids are not handed over here. Each is asked on its own branch of
+        # the exploration conversation, so one item can never be in context while
+        # another is answered; the loop drives that.
         return {
             "ok": True,
-            "test_input_grids": [clone_grid(g) for g, _ in items],
-            "n_test_items": len(items),
             "phase": self.phase,
             "test_round": self.test_round,
+            "n_test_items": len(items),
             "message": (
-                f"Testing stage. There are {len(items)} test inputs, shown together in "
-                "test_input_grids. Apply the same transformation rule to each and submit "
-                "all of your predicted output grids in one submit_final_answer call, as "
-                '\"grids\": a list in the same order. You will not be told whether any '
-                "of them is right."
+                f"Testing stage. You will be given {len(items)} test input"
+                f"{'' if len(items) == 1 else 's'}"
+                + ("" if len(items) == 1 else ", one at a time and answered separately")
+                + ". Apply the same transformation rule to each and submit the "
+                "predicted output grid with submit_final_answer."
             ),
         }
 

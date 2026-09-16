@@ -328,6 +328,36 @@ class ResponsesConversation:
         if assistant_text and not replayed_calls:
             self._convo.append({"role": "assistant", "content": assistant_text})
 
+    def fork(self) -> "ResponsesConversation":
+        """A branch that carries this conversation's history but not its future.
+
+        The test phase asks about each held-out item on its own branch, so every
+        item is answered with the whole exploration behind it -- queries and the
+        reasoning across them -- while no item can see another one's grid or
+        answer. Chaining forks share the same previous_response_id, which is what
+        makes the server-side branch; replayed conversations copy the list.
+        """
+        other = object.__new__(ResponsesConversation)
+        other.chaining = self.chaining
+        other._convo = list(self._convo)
+        other._pending = list(self._pending)
+        other._previous_response_id = self._previous_response_id
+        other._reasoning_window = self._reasoning_window
+        return other
+
+    def append(self, items: list) -> None:
+        """Add to what is already queued, rather than replacing it.
+
+        ``extend`` sets the next request's payload, which is what a normal turn
+        wants. A branch instead adds its own prompt on top of a payload that is
+        already queued -- the tool output closing the turn it forked from --
+        and replacing that would leave a function call unanswered.
+        """
+        if self.chaining:
+            self._pending = list(self._pending) + list(items)
+        else:
+            self._convo.extend(items)
+
     def extend(self, items: list) -> None:
         """Queue what to send next (tool outputs, or a protocol reminder)."""
         if self.chaining:
