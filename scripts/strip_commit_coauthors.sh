@@ -26,7 +26,7 @@ if ! git diff-index --quiet HEAD --; then
     exit 1
 fi
 
-before=$(git log --branches --remotes --format='%H %(trailers:key=Co-Authored-By)' \
+before=$(git log --branches --format='%H %(trailers:key=Co-Authored-By)' \
          | grep -c 'Co-Authored-By' || true)
 echo "commits carrying the trailer, before: $before"
 if [ "$before" = "0" ]; then
@@ -41,15 +41,22 @@ git for-each-ref --format='%(refname) %(objectname)' refs/heads \
 # --msg-filter reads each message on stdin and writes the replacement. Dropping
 # the lines can leave a trailing blank line; git normalises that when it rebuilds
 # the commit.
+# --branches, not --all. --all would also rewrite the refs/remotes/origin/*
+# refs, which are this clone's record of where the server is. Rewriting them
+# makes --force-with-lease compare the server against a value it has never held,
+# and the push is rejected with "stale info". The local branches cover the whole
+# history anyway, and the remote-tracking refs correct themselves on the push.
 FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --msg-filter '
     sed -e "/^Co-[Aa]uthored-[Bb]y: Claude/d" \
         -e "/^Co-[Aa]uthored-[Bb]y: .*@anthropic\.com>/d" \
         -e "/Generated with \[Claude Code\]/d"
-' -- --all
+' -- --branches
 
-# --branches --remotes, not --all: filter-branch parks the pre-rewrite tips under
-# refs/original/, which --all would walk, so the count would never reach zero.
-after=$(git log --branches --remotes --format='%H %(trailers:key=Co-Authored-By)' \
+# --branches only, matching what was rewritten. Not --all: filter-branch parks
+# the pre-rewrite tips under refs/original/, and the remote-tracking refs still
+# point at the old commits until the push lands, so either would keep the count
+# above zero no matter how well the rewrite went.
+after=$(git log --branches --format='%H %(trailers:key=Co-Authored-By)' \
         | grep -c 'Co-Authored-By' || true)
 echo "commits carrying the trailer, after: $after"
 [ "$after" = "0" ] || { echo "Some survived -- not pushing." >&2; exit 1; }
