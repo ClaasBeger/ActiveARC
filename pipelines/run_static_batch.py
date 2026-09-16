@@ -72,6 +72,30 @@ def developer_prompt() -> str:
     ])
 
 
+def study_message(train_pairs) -> str:
+    """The pairs alone, with no held-out input in view.
+
+    The rule is inferred once here and each held-out item is answered on a branch
+    from this point, mirroring the active arm where the model reasons across its
+    queries and every test item forks from the end of exploration. Without it the
+    static arm re-infers the rule independently per item, and so gets one fresh
+    attempt per item where the active arm gets one in total.
+    """
+    payload = {"train": [{"input": p.input, "output": p.output} for p in train_pairs]}
+    return ("Here are the task's training examples. Work out the transformation rule "
+            "they share. You will then be given held-out input grids to apply it to, "
+            "one at a time.\n\n```json\n" + _dumps(payload) + "\n```")
+
+
+def answer_message(test_input, test_index: int, n_tests: int) -> str:
+    lead = ("Apply the rule to this input and submit the output grid with "
+            "submit_prediction.")
+    if n_tests > 1:
+        lead += (f" This is held-out input {test_index + 1} of {n_tests}; they are "
+                 "answered separately and you are told nothing about the others.")
+    return lead + "\n\n```json\n" + _dumps({"test_input": test_input}) + "\n```"
+
+
 def task_message(train_pairs, test_input, test_index: int, n_tests: int) -> str:
     payload: Dict[str, Any] = {
         "train": [{"input": p.input, "output": p.output} for p in train_pairs],
@@ -104,6 +128,96 @@ def _assistant_text(response: Any) -> Optional[str]:
             if text:
                 parts.append(text)
     return "\n".join(parts) if parts else None
+
+
+def study_and_answer(client, train_pairs, items, *, model: str,
+                     reasoning_effort: Optional[str], max_turns: int, store: bool,
+                     provider: str = PROVIDER_OPENAI) -> List[Dict[str, Any]]:
+    """Infer the rule once from the pairs, then answer each item on its own branch.
+
+    The branch point sits after the pairs and before any held-out input, so every
+    item is answered with the same inference behind it and none of them sees
+    another. Same shape as the active arm's test phase.
+    """
+    store = resolve_store(provider, store)
+    base = ResponsesConversation(provider, [
+        {"role": "developer", "content": developer_prompt()},
+        {"role": "user", "content": study_message(train_pairs)},
+    ])
+    study_transcript: List[Dict[str, Any]] = []
+
+    kwargs: Dict[str, Any] = {"model": model, "store": store, **base.create_kwargs()}
+    if reasoning_effort is not None:
+        kwargs["reasoning"] = {"effort": reasoning_effort}
+    response = client.responses.create(**kwargs)
+    study_transcript.append({
+        "turn": 0, "phase": "study", "response_id": response.id,
+        "response": summarize_response(response),
+        "assistant": _assistant_text(response), "tool_calls": [], "tool_results": [],
+    })
+    base.record_turn(response, [], assistant_text=_assistant_text(response))
+
+    results: List[Dict[str, Any]] = []
+    for idx, (test_input, gold) in enumerate(items):
+        convo = base.fork()
+        convo.append([{"role": "user",
+                       "content": answer_message(test_input, idx, len(items))}])
+        transcript: List[Dict[str, Any]] = []
+        prediction = None
+        reason = "max_turns"
+
+        for turn in range(max_turns):
+            kwargs = {"model": model, "tools": STUDENT_TOOLS, "store": store,
+                      **convo.create_kwargs()}
+            if reasoning_effort is not None:
+                kwargs["reasoning"] = {"effort": reasoning_effort}
+            response = client.responses.create(**kwargs)
+            calls = [it for it in (getattr(response, "output", None) or [])
+                     if _output_item_type(it) == "function_call"]
+            log = {"turn": turn, "phase": "answer", "test_item": idx,
+                   "response_id": response.id, "response": summarize_response(response),
+                   "assistant": _assistant_text(response),
+                   "tool_calls": [dict(zip(("call_id", "name", "arguments"),
+                                           _function_call_fields(c))) for c in calls],
+                   "tool_results": []}
+            transcript.append(log)
+            convo.record_turn(response, [_function_call_fields(c) for c in calls],
+                              assistant_text=_assistant_text(response))
+            if not calls:
+                reminder = ("No prediction was submitted. Call submit_prediction with "
+                            '{"grid": [[...], ...]} for this input.')
+                log["tool_results"].append(
+                    {"name": "_protocol_reminder", "result": {"ok": False, "error": reminder}})
+                convo.append([{"role": "user", "content": reminder}])
+                continue
+            outs = []
+            submitted = False
+            for c in calls:
+                call_id, name, arguments = _function_call_fields(c)
+                if name != "submit_prediction":
+                    out = {"ok": False, "error": f"Unknown tool: {name}"}
+                else:
+                    parsed = parse_student_prediction(arguments)
+                    if parsed.get("ok"):
+                        prediction, out, submitted = parsed["grid"], {"ok": True, "recorded": True}, True
+                    else:
+                        out = parsed
+                log["tool_results"].append({"name": name, "result": out})
+                outs.append({"type": "function_call_output", "call_id": call_id,
+                             "output": json.dumps(out)})
+            convo.append(outs)
+            if submitted:
+                reason = "submitted"
+                break
+
+        results.append({
+            "prediction": prediction, "reason": reason,
+            "transcript": transcript, "usage": usage_totals(transcript),
+        })
+    # The study turn is shared by every branch: one request, recorded once, its
+    # tokens counted once. Folding it into each branch would multiply both.
+    return {"study": study_transcript, "study_usage": usage_totals(study_transcript),
+            "items": results}
 
 
 def predict(client, train_pairs, test_input, *, test_index: int, n_tests: int, model: str,
@@ -252,16 +366,20 @@ def run_one(client, args, task_id: str) -> Dict[str, Any]:
     if not scored:
         return {"task_id": task_id, "error": "no test items selected"}
 
+    run = study_and_answer(
+        client, train_pairs, scored, model=args.model,
+        reasoning_effort=args.reasoning_effort, max_turns=args.max_turns,
+        store=not args.no_store, provider=args.provider,
+    )
     items = []
-    turns: List[Dict[str, Any]] = []
-    for i, (tin, tout) in enumerate(scored):
-        res = predict(client, train_pairs, tin, test_index=i, n_tests=len(scored), model=args.model,
-                      reasoning_effort=args.reasoning_effort, max_turns=args.max_turns,
-                      store=not args.no_store, provider=args.provider)
+    turns: List[Dict[str, Any]] = list(run["study"])
+    for i, ((tin, tout), res) in enumerate(zip(scored, run["items"])):
         pred = res["prediction"]
-        items.append({"index": i, "kind": kinds[i], "input": tin, "gold_output": tout, "prediction": pred,
-                      "correct": pred is not None and is_equal_grid(pred, tout), "reason": res["reason"],
-                      "turns": len(res["transcript"]), "usage": res["usage"]})
+        items.append({"index": i, "kind": kinds[i], "input": tin, "gold_output": tout,
+                      "prediction": pred,
+                      "correct": pred is not None and is_equal_grid(pred, tout),
+                      "reason": res["reason"], "turns": len(res["transcript"]),
+                      "usage": res["usage"]})
         turns.extend(res["transcript"])
     return {
         "setting": "static",
