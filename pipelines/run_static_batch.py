@@ -31,6 +31,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from framework.grids import is_equal_grid  # noqa: E402
+from framework.tasks.eval_items import sampled_item  # noqa: E402
 from framework.inverse_query.prompts import _dumps  # noqa: E402
 from framework.inverse_query.tools import STUDENT_TOOLS, parse_student_prediction  # noqa: E402
 from framework.prompting.active_arc_tools import DEFAULT_OPENAI_MODEL  # noqa: E402
@@ -232,14 +233,33 @@ def run_one(client, args, task_id: str) -> Dict[str, Any]:
         if len(train_pairs) < n:
             return {"task_id": task_id, "error": "sampler_exhausted",
                     "n_pairs_wanted": n, "n_pairs_got": len(train_pairs)}
+    # The same held-out items the active arm answers, in the same order, so a
+    # column here lines up with a column there. The sampled one is read from the
+    # frozen manifest rather than redrawn: it comes off the session RNG, and this
+    # runner has already consumed that stream drawing generator pairs.
+    scored: List[tuple] = []
+    kinds: List[str] = []
+    if args.test_source in ("official", "both"):
+        for tin, tout in tests:
+            scored.append((tin, tout)); kinds.append("official")
+    if args.test_source in ("sampled", "both"):
+        got = sampled_item(args.dataset, args.seed, task_id)
+        if got is None:
+            return {"task_id": task_id, "error": (
+                f"no frozen sampled item for {task_id} at seed {args.seed}; "
+                "run pipelines.build_eval_items first")}
+        scored.append((got[0], got[1])); kinds.append("sampled")
+    if not scored:
+        return {"task_id": task_id, "error": "no test items selected"}
+
     items = []
     turns: List[Dict[str, Any]] = []
-    for i, (tin, tout) in enumerate(tests):
-        res = predict(client, train_pairs, tin, test_index=i, n_tests=len(tests), model=args.model,
+    for i, (tin, tout) in enumerate(scored):
+        res = predict(client, train_pairs, tin, test_index=i, n_tests=len(scored), model=args.model,
                       reasoning_effort=args.reasoning_effort, max_turns=args.max_turns,
                       store=not args.no_store, provider=args.provider)
         pred = res["prediction"]
-        items.append({"index": i, "input": tin, "gold_output": tout, "prediction": pred,
+        items.append({"index": i, "kind": kinds[i], "input": tin, "gold_output": tout, "prediction": pred,
                       "correct": pred is not None and is_equal_grid(pred, tout), "reason": res["reason"],
                       "turns": len(res["transcript"]), "usage": res["usage"]})
         turns.extend(res["transcript"])
@@ -248,6 +268,8 @@ def run_one(client, args, task_id: str) -> Dict[str, Any]:
         "task_id": task_id, "dataset": args.dataset, "backend": "responses",
         "model": args.model, "reasoning_effort": args.reasoning_effort,
         "n_train": len(task.train_pairs), "n_test": len(tests),
+        "test_item_kinds": kinds,
+        "test_item_correct": [bool(it["correct"]) for it in items],
         "n_test_correct": sum(1 for it in items if it["correct"]),
         "correct": bool(items) and all(it["correct"] for it in items),
         "test_items": items,
@@ -267,6 +289,13 @@ def main() -> None:
     p.add_argument("--model", type=str, default=None)
     p.add_argument("--provider", choices=list(PROVIDERS), default=None,
                    help="Default: inferred from --model, else openai.")
+    p.add_argument("--test-source", choices=["official", "sampled", "both"], default="official",
+                   help="Which held-out item(s) to answer. 'both' adds the frozen "
+                        "generator-sampled item the active arm is also scored on, so "
+                        "the arms can be compared on the same items. The ARC author "
+                        "wrote the official items alongside the demonstrations, so on "
+                        "those the static arm has knowledge of the test that a model "
+                        "selector does not; the sampled item is the control for that.")
     p.add_argument("--teacher-demos", type=str, default=None,
                    help="With --pair-source teacher: directory of run_teacher_demos output.")
     p.add_argument("--pair-source", choices=["official", "generator", "teacher"], default="official",
