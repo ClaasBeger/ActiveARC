@@ -14,12 +14,15 @@ import copy
 import random
 import textwrap
 from pathlib import Path
+
+from framework.repo_paths import ACTIVEARC_ROOT as _REPO_ROOT
 from typing import Callable, List, Optional, Tuple
 
 from framework.grids import Grid, is_equal_grid, normalized_cell_edit_between_outputs
 
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
+# Worktree-aware: bundled data lives in the main checkout.
+ROOT_DIR = _REPO_ROOT
 RE_ARC_VERIFIERS_PATH = ROOT_DIR / "external" / "re_arc" / "verifiers.py"
 
 

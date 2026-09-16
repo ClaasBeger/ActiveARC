@@ -18,6 +18,8 @@ import json
 import random
 from dataclasses import dataclass, fields
 from pathlib import Path
+
+from framework.repo_paths import ACTIVEARC_ROOT as _REPO_ROOT
 from typing import Dict, List, Optional
 
 from framework.active_arc.headless_trial import ActiveArcTrialSession, create_trial_session
@@ -27,7 +29,8 @@ from framework.tasks.arc_dataset import ensure_verifier_slots
 from framework.tasks.base import ArcTask, Verifier
 from framework.verifier_selection import VerifierSlot, _callable_for_slot
 
-_ROOT = Path(__file__).resolve().parents[2]
+# Worktree-aware: bundled data lives in the main checkout.
+_ROOT = _REPO_ROOT
 DEFAULT_PAIRS_PATH = _ROOT / "experiments" / "slippage" / "slippage_pairs.json"
 
 BROAD_SLOT: VerifierSlot = "re_arc"

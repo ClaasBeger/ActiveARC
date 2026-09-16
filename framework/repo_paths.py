@@ -47,3 +47,11 @@ def activearc_root() -> Path:
 
 
 ACTIVEARC_ROOT = activearc_root()
+
+# Bundled data and vendored dependencies. Resolved against the main checkout
+# because a worktree does not receive the repository's submodules: they are
+# present but empty there, so verifiers living in one (the google code-golf
+# slots, the only verifier for 19 ARC-AGI-1 tasks) silently vanish and those
+# tasks report "no valid verifier" instead of raising.
+EXTERNAL_DIR = ACTIVEARC_ROOT / "external"
+

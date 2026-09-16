@@ -8,11 +8,14 @@ import json
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from functools import lru_cache
 from pathlib import Path
+
+from framework.repo_paths import ACTIVEARC_ROOT as _REPO_ROOT
 from typing import Callable, Dict, List, Optional, Tuple
 
 from framework.tasks.base import Grid
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
+# Worktree-aware: bundled data lives in the main checkout.
+ROOT_DIR = _REPO_ROOT
 VALID_DIR = ROOT_DIR / "external" / "agi2_verifiers" / "valid"
 
 Verifier = Callable[[Grid], Grid]

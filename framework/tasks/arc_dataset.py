@@ -9,6 +9,8 @@ from collections import defaultdict
 import sys
 import warnings
 from pathlib import Path
+
+from framework.repo_paths import ACTIVEARC_ROOT as _REPO_ROOT
 from types import ModuleType
 from typing import Callable, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
@@ -18,7 +20,8 @@ from framework.tasks.base import ArcTask, TaskSource
 from framework.integrations.re_arc_adapter import get_re_arc_verifier
 
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
+# Worktree-aware: bundled data lives in the main checkout.
+ROOT_DIR = _REPO_ROOT
 
 ARC_ORIGINAL_DIR = ROOT_DIR / "external" / "arc_original_train"
 RE_ARC_ZIP = ROOT_DIR / "external" / "re_arc" / "re_arc.zip"

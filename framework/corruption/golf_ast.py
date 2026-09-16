@@ -14,13 +14,16 @@ import random
 import textwrap
 import warnings
 from pathlib import Path
+
+from framework.repo_paths import ACTIVEARC_ROOT as _REPO_ROOT
 from typing import Callable, List, Literal, Optional, Tuple
 
 from framework.grids import Grid, is_equal_grid, normalized_cell_edit_between_outputs
 from framework.tasks.arc_dataset import _arc_gen_id_to_task_num_and_generator
 
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
+# Worktree-aware: bundled data lives in the main checkout.
+ROOT_DIR = _REPO_ROOT
 
 GolfSource = Literal["google", "keymoon", "neurips"]
 
