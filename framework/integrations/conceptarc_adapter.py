@@ -45,6 +45,11 @@ from framework.repo_paths import ACTIVEARC_ROOT as _REPO_ROOT
 _ACTIVEARC_ROOT = _REPO_ROOT
 PROGRAMS_DIR = _ACTIVEARC_ROOT / "external" / "conceptarc" / "programs"
 RULES_CSV = PROGRAMS_DIR.parent / "ConceptARC_rules.csv"
+# The revised pass over the same 160 tasks, rewritten to be precise enough to
+# act on: 153 of the rules differ from the original and 55 are longer. It wins
+# where present, since the original's terser phrasings are what it set out to
+# replace.
+REVISED_RULES_CSV = _ACTIVEARC_ROOT / "external" / "ConceptARC_rules_v1_revised.csv"
 _SAMPLE_TRAIN = 3
 _SAMPLE_TEST = 3
 _SAMPLE_ATTEMPTS = 400
@@ -245,6 +250,8 @@ def _rules_csv_path() -> Optional[Path]:
         path = Path(env).expanduser()
         if path.is_file():
             return path
+    if REVISED_RULES_CSV.is_file():
+        return REVISED_RULES_CSV
     if RULES_CSV.is_file():
         return RULES_CSV
     sibling = (
@@ -256,6 +263,21 @@ def _rules_csv_path() -> Optional[Path]:
     return sibling if sibling.is_file() else None
 
 
+def _clean_rule(value: Optional[str]) -> str:
+    """Strip the quoting debris a hand-edited CSV leaves behind.
+
+    One row quotes a word inside an already-quoted field without doubling the
+    inner quotes, which leaves a stray one mid-sentence and another at the end.
+    The text itself survives, so it is repaired here rather than dropped.
+    """
+    rule = (value or "").strip()
+    if rule.startswith('"') and rule.endswith('"'):
+        rule = rule[1:-1].strip()
+    if rule.count('"') % 2 == 1 and rule.endswith('"'):
+        rule = rule[:-1].strip()
+    return rule
+
+
 @lru_cache(maxsize=1)
 def _ground_truth_rules() -> Dict[str, str]:
     path = _rules_csv_path()
@@ -263,9 +285,15 @@ def _ground_truth_rules() -> Dict[str, str]:
         return {}
     out: Dict[str, str] = {}
     with path.open(newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
+        # skipinitialspace, because the revised file writes 56 of its 160 rows
+        # as ``Task, "rule"``. A quoted field has to start flush against the
+        # comma, so without this the reader treats the space as the start of an
+        # unquoted field and stops at the rule's first internal comma -- the
+        # teacher would be handed "For each line" in place of the whole rule,
+        # and it fails silently, as a short rule rather than an error.
+        for row in csv.DictReader(f, skipinitialspace=True):
             task = (row.get("Task") or "").strip()
-            rule = (row.get("Rule") or "").strip()
+            rule = _clean_rule(row.get("Rule"))
             if task and rule:
                 out[task] = rule
     return out
