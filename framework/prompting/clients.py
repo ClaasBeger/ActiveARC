@@ -188,14 +188,20 @@ _UPSTREAM_PROVIDER = {
     "anthropic": "anthropic",
     "openai": "openai",
     # DeepSeek publishes ~19 upstreams and the first-party one 404s here.
-    # Relace, DeepInfra, Together, Novita and Fireworks all pin cleanly, but
-    # they are not interchangeable: they differ in how much the model thinks
-    # (1,080 vs 3,000 reasoning tokens on the same first turn), so a run wants
-    # one of them throughout and the record says which. DeepInfra over Relace
-    # because Relace throttles hardest on the shared free pool -- it answered a
-    # burst at 7.4s a call against DeepInfra's 2.1s, and 429'd a real run
-    # outright.
-    "deepseek": "DeepInfra",
+    # Relace, DeepInfra, Together, Novita and Fireworks all pin cleanly and all
+    # carry tool calls and replayable reasoning, but they are not
+    # interchangeable: they differ in how much the model thinks, and they differ
+    # enormously in decode speed, which is what sets the wall clock when a task
+    # spends ~19k output tokens. Measured on one long generation:
+    #
+    #   Together   345 tok/s      Novita    244 tok/s     Relace  235 tok/s
+    #   Fireworks  124 tok/s      DeepInfra  75 tok/s
+    #
+    # That is 12.5h against 58h for the 810-task static sweep. Relace is out
+    # regardless: it 429s on a shared free pool and killed a real run. Together
+    # it is -- verified for tool calling and byte-stable reasoning replay on
+    # both the chat and Responses surfaces.
+    "deepseek": "Together",
     "moonshotai": "Moonshot AI",
     "x-ai": "xAI",
     # Inkling has no first-party endpoint at all: DeepInfra, BaseTen and Together
