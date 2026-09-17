@@ -271,7 +271,7 @@ def predict(client, train_pairs, test_input, *, test_index: int, n_tests: int, m
     return {"prediction": prediction, "reason": reason, "transcript": transcript, "usage": usage_totals(transcript)}
 
 
-def _generator_pairs(args, task_id: str, n: int):
+def _generator_pairs(args, task_id: str, n: int, exclude_inputs=None):
     """n pairs drawn from the task's generator, in place of its authored ones.
 
     The random arm of the matched-K comparison: same count and same provenance
@@ -286,7 +286,13 @@ def _generator_pairs(args, task_id: str, n: int):
     session = create_trial_session(seed=args.seed, task_id=task_id,
                                    hot_start=True, dataset=args.dataset)
     pairs = []
-    exclude = []
+    # The held-out inputs this trial will be scored on. The sampler is seeded
+    # exactly as the frozen item was drawn, so on ARC-AGI-1 and ARC-AGI-2 its
+    # first draw *is* that item: every random-K trial was being shown the
+    # answer to its own question, and scored near ceiling for it. ConceptARC
+    # and P-ARC escaped only because their sessions move the RNG on before the
+    # item is drawn.
+    exclude = [list(map(list, g)) for g in (exclude_inputs or [])]
     if session.hot_start_pair is not None:
         pairs.append(session.hot_start_pair)
         exclude.append(session.hot_start_pair.input)
@@ -341,7 +347,12 @@ def run_one(client, args, task_id: str) -> Dict[str, Any]:
         train_pairs = [GridPair(d["input"], d["output"]) for d in demos[:want]]
     elif args.pair_source == "generator":
         n = len(task.train_pairs) if args.n_pairs in (None, "auto") else int(args.n_pairs)
-        train_pairs = _generator_pairs(args, task_id, n)
+        held_out = list(task.test_inputs)
+        if args.test_source in ("sampled", "both"):
+            got = sampled_item(args.dataset, args.seed, task_id)
+            if got is not None:
+                held_out.append(got[0])
+        train_pairs = _generator_pairs(args, task_id, n, exclude_inputs=held_out)
         if len(train_pairs) < n:
             return {"task_id": task_id, "error": "sampler_exhausted",
                     "n_pairs_wanted": n, "n_pairs_got": len(train_pairs)}
