@@ -11,11 +11,19 @@ Lookups are compact JSON under ``external/nl_rules/``. Rebuild with
 from __future__ import annotations
 
 import json
+import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-_ACTIVEARC_ROOT = Path(__file__).resolve().parents[2]
+from framework.repo_paths import ACTIVEARC_ROOT as _REPO_ROOT
+
+# Via repo_paths, not this file's parents: the lookups are untracked, so they
+# exist only in the main checkout. Resolved relative to __file__, a run from a
+# git worktree looks inside the worktree, finds nothing, and hands the teacher
+# no rule at all -- for every ARC-AGI-1, ARC-AGI-2 and P-ARC task, silently,
+# because a missing file and a task with no rule are the same empty dict.
+_ACTIVEARC_ROOT = _REPO_ROOT
 NL_RULES_DIR = _ACTIVEARC_ROOT / "external" / "nl_rules"
 LARC_PATH = NL_RULES_DIR / "larc_arc_agi_1.json"
 MARC2_PATH = NL_RULES_DIR / "marc2_arc_agi_2.json"
@@ -28,10 +36,28 @@ def _normalize_task_id(task_id: str) -> str:
     return tid
 
 
+_warned: set = set()
+
+
+def _warn_missing(p: Path) -> None:
+    """Say once that a lookup is absent, rather than degrade quietly.
+
+    Every caller treats "no rules" as "this task has no rule", which is a
+    legitimate state, so an absent file otherwise costs a whole dataset's rules
+    without a word.
+    """
+    key = str(p)
+    if key not in _warned:
+        _warned.add(key)
+        print(f"[nl_rules] lookup not found: {p} -- rules from it will be "
+              f"reported as unavailable", file=sys.stderr)
+
+
 @lru_cache(maxsize=2)
 def _load_rules(path: str) -> Dict[str, str]:
     p = Path(path)
     if not p.is_file():
+        _warn_missing(p)
         return {}
     payload = json.loads(p.read_text(encoding="utf-8"))
     rules = payload.get("rules") if isinstance(payload, dict) else None
