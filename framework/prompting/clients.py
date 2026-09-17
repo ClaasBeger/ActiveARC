@@ -155,8 +155,9 @@ def build_client(provider: str) -> Any:
             base_url=OPENROUTER_BASE_URL,
             default_headers=_OPENROUTER_HEADERS,
             max_retries=_MAX_RETRIES,
+            timeout=_TIMEOUT_S,
         )
-    return OpenAI(api_key=api_key, max_retries=_MAX_RETRIES)
+    return OpenAI(api_key=api_key, max_retries=_MAX_RETRIES, timeout=_TIMEOUT_S)
 
 
 def reasoning_extra_body(
@@ -240,6 +241,13 @@ ROUTING_OVERRIDE_ENV = "ACTIVEARC_UPSTREAM"
 # only a second pass fills. The SDK default is 2 tries; this rides out a longer
 # squeeze, with the SDK's own exponential backoff between attempts.
 _MAX_RETRIES = int(os.environ.get("ACTIVEARC_MAX_RETRIES", "8"))
+
+# Without a timeout a socket that dies mid-request -- a dropped connection, a
+# sleeping laptop -- leaves the read blocking forever. The process stays alive
+# at 0% CPU and writes nothing, which looks exactly like a slow task and so goes
+# unnoticed for as long as nobody checks the file times. Bounded, the attempt
+# fails and the retries above take over.
+_TIMEOUT_S = float(os.environ.get("ACTIVEARC_TIMEOUT_S", "600"))
 
 
 def responses_extras(
