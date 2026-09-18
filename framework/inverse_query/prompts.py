@@ -131,10 +131,12 @@ def teacher_developer_prompt(session: InverseQuerySession) -> str:
         "time, with no feedback, using only the demonstrations you have shown.",
         "- Your one example is teacher-only. The Student does not see it unless you show "
         "that pair with show_example or show_transformed_input.",
-        "- The verifier is only defined for inputs that follow the task's input conventions "
-        "(as in your example: which colours play which role, how things are laid out). An "
-        "input outside them gets an undefined output, so mirror the example's structure "
-        "when you author inputs.",
+        # States what the environment does, not what to author. Telling the
+        # teacher to mirror the example steers its choice of inputs, which is the
+        # very thing this setting measures.
+        "- The verifier is only defined for inputs that follow the task's input "
+        "conventions. An input it cannot evaluate is refused: no pair is added and the "
+        "Student is not shown it, and you may submit a different one.",
         "- The Student never sees the rule or the verifier. Do not try to speak to them "
         "in prose; only the tools above change what they see.",
     ]
