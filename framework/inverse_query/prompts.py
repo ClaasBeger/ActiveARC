@@ -71,15 +71,14 @@ def matched_teacher_developer_prompt(session: "InverseQuerySession") -> str:
     # saying it is scored would push the teacher to economise and measure how few
     # it can be pressured into instead.
     if k is None:
-        job = ("and one input-output example. Your job is to assemble as many "
-               "demonstration pairs of this rule as you judge necessary.")
+        job = ("and one input-output example. Your job is to assemble "
+               "demonstration pairs of this rule.")
         seen = ("Those pairs are then given to a separate solver that has never seen "
                 "this task. It sees your pairs and nothing else: ")
         scored = ("From them alone it must infer the rule and apply it to held-out "
                   "inputs of this task. You are scored on whether it answers those "
                   "correctly. The number of pairs you show will also be recorded.")
-        stop = ("Stop when you judge the set sufficient: reply without calling a "
-                "tool and the set is taken as complete.")
+        stop = ("Call finish_teaching to hand the set over and end teaching.")
     else:
         job = ("and one input-output example. Your job is to assemble exactly "
                f"{k} demonstration pairs of this rule.")

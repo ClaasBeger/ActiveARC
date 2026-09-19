@@ -116,6 +116,17 @@ GET_VERIFIER_IMPLEMENTATION_TOOL: Dict[str, Any] = {
     "strict": True,
 }
 
+FINISH_TEACHING_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "name": "finish_teaching",
+    "description": (
+        "Hand over the demonstrations you have shown and end teaching. Call this "
+        "when the set is complete; nothing further is added afterwards."
+    ),
+    "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    "strict": True,
+}
+
 TEACHER_TOOLS: List[Dict[str, Any]] = [
     SHOW_EXAMPLE_TOOL,
     SHOW_TRANSFORMED_INPUT_TOOL,
@@ -139,6 +150,10 @@ def teacher_tools_for(session: InverseQuerySession) -> List[Dict[str, Any]]:
              # environment supplies every output, so the pairs differ between arms
              # in which inputs were picked and in nothing else.
              and not (matched and t["name"] in ("show_example", "start_exam"))]
+    # Without a cap the set has no size to reach, so the teacher needs a way to
+    # say it is done. A budgeted teacher stops at K and is not offered the tool.
+    if matched and session.max_demonstrations is None:
+        tools.append(FINISH_TEACHING_TOOL)
     if session.implementation_available():
         tools.append(GET_VERIFIER_IMPLEMENTATION_TOOL)
     return tools

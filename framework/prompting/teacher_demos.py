@@ -211,9 +211,21 @@ def collect_teacher_demos(
             continue
 
         outs = []
+        finished = False
         for c in calls:
             call_id, name, arguments = _call_fields(c)
-            if name == "start_exam":
+            if name == "finish_teaching":
+                # Refusing an empty set costs one turn and is recoverable; an
+                # empty hand-over is not, since the student would see no pairs.
+                if session.demonstrations:
+                    finished = True
+                    out = {"ok": True, "n_demonstrations": len(session.demonstrations),
+                           "message": "Teaching ended; the set has been handed over."}
+                else:
+                    out = {"ok": False, "error": (
+                        "No demonstrations have been shown yet, so there is nothing "
+                        "to hand over. Add at least one with show_transformed_input.")}
+            elif name == "start_exam":
                 # No exam in this setting; the set is scored elsewhere.
                 remaining = (target - len(session.demonstrations)) if target else 0
                 out = {"ok": False, "error": (
@@ -229,6 +241,9 @@ def collect_teacher_demos(
             outs.append({"type": "function_call_output", "call_id": call_id,
                          "output": json.dumps(out)})
         convo.extend(outs)
+        if finished:
+            reason = "teacher_finished"
+            break
 
     if target is not None and len(session.demonstrations) >= target:
         reason = "demos_complete"
