@@ -28,7 +28,10 @@ from framework.prompting.clients import (
     resolve_model,
     resolve_provider,
 )
-from framework.prompting.branch_test import run_branched_test_chat
+from framework.prompting.branch_test import (
+    MAX_CONSECUTIVE_STALLS,
+    run_branched_test_chat,
+)
 from framework.prompting.response_logging import (
     chat_usage_to_responses_shape,
     usage_totals,
@@ -76,6 +79,7 @@ def run_openai_agent_loop(
     ]
 
     transcript: List[Dict[str, Any]] = []
+    consecutive_stalls = 0
     last_result: Dict[str, Any] = {
         "session": session,
         "transcript": transcript,
@@ -138,7 +142,31 @@ def run_openai_agent_loop(
         # Replayed verbatim, reasoning_details included: anything rebuilt from
         # parsed fields loses the signed reasoning and the model restarts its
         # thinking every turn.
-        messages.append(json.loads(json.dumps(msg)))
+        #
+        # Unless the turn was cut off mid-thought with nothing to act on. Then
+        # replaying it hands the model an unfinished thought to resume, which it
+        # does, and is cut off again -- a loop that adds the whole output cap to
+        # the context every turn until the window is gone. Dropping it lets the
+        # next turn start the thought over instead of continuing it.
+        truncated = (payload["choices"][0] or {}).get("finish_reason") == "length"
+        stalled = truncated and not raw_tool_calls
+        if stalled:
+            transcript[-1]["dropped_truncated_reasoning"] = True
+            consecutive_stalls += 1
+        else:
+            messages.append(json.loads(json.dumps(msg)))
+            consecutive_stalls = 0
+
+        if consecutive_stalls >= MAX_CONSECUTIVE_STALLS:
+            return _finish({
+                "reason": "reasoning_runaway",
+                "message": (
+                    f"{consecutive_stalls} consecutive turns hit the output cap "
+                    "while still reasoning and produced no tool call."
+                ),
+                "phase": session.phase,
+                "query_count": session.query_count,
+            })
 
         if not raw_tool_calls:
             reminder = plain_text_protocol_reminder(session, assistant_text=msg.get("content"))

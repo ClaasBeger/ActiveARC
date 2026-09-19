@@ -16,6 +16,12 @@ from framework.prompting.active_arc_tools import responses_tools_for_phase
 from framework.prompting.clients import responses_extras
 from framework.prompting.response_logging import summarize_response
 
+# A model that keeps reasoning past the output cap without ever calling a tool is
+# not going to finish this item. Give it a few attempts from a clean slate, then
+# stop rather than spend the remaining turns the same way. Defined here because
+# active_arc_openai imports this module, so the constant cannot live there.
+MAX_CONSECUTIVE_STALLS = 3
+
 
 def _item_type(item: Any) -> str:
     if isinstance(item, dict):
@@ -144,6 +150,7 @@ def run_branched_test_chat(
         messages = [dict(m) for m in base_messages]
         messages.append({"role": "user", "content": test_phase.test_item_prompt(session, idx)})
         answered = False
+        stalls = 0
 
         for turn in range(max_turns):
             kwargs: Dict[str, Any] = {
@@ -170,8 +177,18 @@ def run_branched_test_chat(
                 "usage": chat_usage_to_responses_shape(payload.get("usage")),
             }
             transcript.append(log)
-            # Verbatim, reasoning_details included.
-            messages.append(json.loads(json.dumps(msg)))
+            # Verbatim, reasoning_details included -- unless the turn was cut off
+            # mid-thought with nothing to act on, in which case replaying it has
+            # the model resume the unfinished thought and be cut off again.
+            truncated = (payload["choices"][0] or {}).get("finish_reason") == "length"
+            if truncated and not calls:
+                log["dropped_truncated_reasoning"] = True
+                stalls += 1
+                if stalls >= MAX_CONSECUTIVE_STALLS:
+                    break
+            else:
+                messages.append(json.loads(json.dumps(msg)))
+                stalls = 0
 
             if not calls:
                 reminder = ("No answer was submitted. Call submit_final_answer with "
