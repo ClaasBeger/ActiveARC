@@ -48,8 +48,15 @@ def run_openai_agent_loop(
     reasoning_effort: Optional[str] = None,
     pin_provider: bool = True,
     prompt_cache: bool = False,
+    max_output_tokens: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Run a Chat Completions tool loop until done, stop, or max_turns."""
+    """Run a Chat Completions tool loop until done, stop, or max_turns.
+
+    ``max_output_tokens`` caps one response. Left unset, the provider applies its
+    own default, which it also reserves against the context window whether or not
+    the model uses it -- and a model that falls into a repetition loop will emit
+    exactly that default, turn after turn, until the conversation no longer fits.
+    """
     resolved_provider = resolve_provider(provider, model)
     resolved_model = resolve_model(resolved_provider, model)
     client = build_client(resolved_provider)
@@ -98,6 +105,8 @@ def run_openai_agent_loop(
             "tool_choice": "auto",
             "temperature": temperature,
         }
+        if max_output_tokens is not None:
+            create_kwargs["max_tokens"] = max_output_tokens
         if extra_body:
             create_kwargs["extra_body"] = extra_body
         # Read the raw body: the SDK's typed message drops reasoning_details,

@@ -116,6 +116,17 @@ def _parse_args() -> argparse.Namespace:
         "this only pays off when trials run several turns (e.g. with --forced-k).",
     )
     p.add_argument("--max-turns", type=int, default=64)
+    p.add_argument(
+        "--max-output-tokens",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Cap one model response. Unset, the provider's own default applies and "
+        "is reserved against the context window whether or not it is used; a model "
+        "that falls into a repetition loop then emits that default every turn until "
+        "the conversation no longer fits. Set it above the model's genuine per-turn "
+        "output so it truncates only runaway generations.",
+    )
     p.add_argument("--temperature", type=float, default=0.2)
     p.add_argument(
         "--reasoning-effort",
@@ -314,6 +325,7 @@ def _run_one(args: argparse.Namespace, task_id: str) -> dict:
             max_turns=args.max_turns,
             reasoning_effort=reasoning_effort,
             provider=args.provider,
+            max_output_tokens=args.max_output_tokens,
         )
     else:
         result = run_openai_agent_loop(
@@ -325,6 +337,7 @@ def _run_one(args: argparse.Namespace, task_id: str) -> dict:
             reasoning_effort=reasoning_effort,
             pin_provider=args.pin_provider,
             prompt_cache=args.prompt_cache,
+            max_output_tokens=args.max_output_tokens,
         )
     if args.evidence_test != "none" and not args.program_test:
         try:
@@ -385,6 +398,7 @@ def main() -> None:
         # record it cannot be told apart from a budgeted one after the fact.
         "forced_k": args.forced_k,
         "test_source": args.test_source,
+        "max_output_tokens": args.max_output_tokens,
         "task_ids": task_ids,
         "flags": {
             "hot_start": args.hot_start,

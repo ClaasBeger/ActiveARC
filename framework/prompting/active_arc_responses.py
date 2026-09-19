@@ -82,6 +82,7 @@ def run_active_arc_responses_loop(
     reasoning_effort: Optional[str] = "low",
     store: bool = True,
     provider: Optional[str] = None,
+    max_output_tokens: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run an ActiveARC trial via the OpenAI Responses API + custom function tools."""
     resolved_provider = resolve_provider(provider, model)
@@ -124,6 +125,8 @@ def run_active_arc_responses_loop(
         create_kwargs.update(
             responses_extras(resolved_provider, resolved_model, reasoning_effort)
         )
+        if max_output_tokens is not None:
+            create_kwargs["max_output_tokens"] = max_output_tokens
 
         response = client.responses.create(**create_kwargs)
         response_log = summarize_response(response)
