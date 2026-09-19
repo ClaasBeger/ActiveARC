@@ -45,8 +45,14 @@ def run_branched_test(
     store: bool,
     max_turns: int,
     transcript: List[Dict[str, Any]],
+    max_output_tokens: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Answer every test item on its own fork of *base_convo*."""
+    """Answer every test item on its own fork of *base_convo*.
+
+    The cap has to be repeated here: this phase builds its own request rather
+    than reusing the exploration loop's, so a cap applied only there leaves the
+    test turns on the provider default.
+    """
     per_item: List[bool] = []
     tools = responses_tools_for_phase("test", program_mode=False, n_test_items=1)
 
@@ -60,6 +66,8 @@ def run_branched_test(
                 "model": model, "tools": tools, "store": store, **convo.create_kwargs()
             }
             kwargs.update(responses_extras(convo.provider, model, reasoning_effort))
+            if max_output_tokens is not None:
+                kwargs["max_output_tokens"] = max_output_tokens
             response = client.responses.create(**kwargs)
             calls = [i for i in (getattr(response, "output", None) or [])
                      if _item_type(i) == "function_call"]
@@ -123,6 +131,7 @@ def run_branched_test_chat(
     temperature: float,
     max_turns: int,
     transcript: List[Dict[str, Any]],
+    max_output_tokens: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Chat-completions equivalent: one branch of *base_messages* per item."""
     from framework.prompting.active_arc_tools import chat_tools_for_phase
@@ -141,6 +150,8 @@ def run_branched_test_chat(
                 "model": model, "messages": messages, "tools": tools,
                 "tool_choice": "auto", "temperature": temperature,
             }
+            if max_output_tokens is not None:
+                kwargs["max_tokens"] = max_output_tokens
             if extra_body:
                 kwargs["extra_body"] = extra_body
             raw = client.chat.completions.with_raw_response.create(**kwargs)

@@ -210,6 +210,7 @@ def run_active_arc_responses_loop(
                     client, session, convo, model=resolved_model,
                     reasoning_effort=reasoning_effort, store=store,
                     max_turns=8, transcript=transcript,
+                    max_output_tokens=max_output_tokens,
                 )
                 last_result["usage"] = usage_totals(transcript)
                 last_result["final"] = {

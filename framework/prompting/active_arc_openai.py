@@ -188,6 +188,7 @@ def run_openai_agent_loop(
                     client, session, messages, model=resolved_model,
                     extra_body=extra_body, temperature=temperature,
                     max_turns=8, transcript=transcript,
+                    max_output_tokens=max_output_tokens,
                 )
                 return _finish({
                     "reason": "trial_complete",
