@@ -66,25 +66,48 @@ def matched_teacher_developer_prompt(session: "InverseQuerySession") -> str:
     the thing being measured, and naming it would measure the prompt instead.
     """
     k = session.max_demonstrations
-    return "\n".join([
+    # Free variant: how many pairs a rule-aware teacher chooses to show is the
+    # measurement, so the count is disclosed as recorded rather than scored --
+    # saying it is scored would push the teacher to economise and measure how few
+    # it can be pressured into instead.
+    if k is None:
+        job = ("and one input-output example. Your job is to assemble as many "
+               "demonstration pairs of this rule as you judge necessary.")
+        seen = ("Those pairs are then given to a separate solver that has never seen "
+                "this task. It sees your pairs and nothing else: ")
+        scored = ("From them alone it must infer the rule and apply it to held-out "
+                  "inputs of this task. You are scored on whether it answers those "
+                  "correctly. The number of pairs you show will also be recorded.")
+        stop = ("Stop when you judge the set sufficient: reply without calling a "
+                "tool and the set is taken as complete.")
+    else:
+        job = ("and one input-output example. Your job is to assemble exactly "
+               f"{k} demonstration pairs of this rule.")
+        seen = ("Those pairs are then given to a separate solver that has never seen "
+                f"this task. It sees your {k} pairs and nothing else: ")
+        scored = ("From them alone it must infer the rule and apply it to held-out "
+                  "inputs of this task. Whether it answers those correctly is what "
+                  "is scored.")
+        stop = None
+    lines = [
         "You are dealing with grid transformation tasks: an input grid is mapped "
         "to an output grid according to an underlying rule.",
         "Grids are rectangular matrices with integer colors 0-9.",
         "",
         "You are given the rule in words, the verifier program that implements it, "
-        f"and one input-output example. Your job is to assemble exactly {k} "
-        "demonstration pairs of this rule.",
+        + job,
         "",
-        f"Those pairs are then given to a separate solver that has never seen this "
-        f"task. It sees your {k} pairs and nothing else: not the rule, not the "
+        seen + "not the rule, not the "
         "verifier program, not the example you were given, and nothing you write in "
-        "prose. From them alone it must infer the rule and apply it to held-out "
-        "inputs of this task. Whether it answers those correctly is what is scored.",
+        "prose. " + scored,
         "",
         "Use show_transformed_input to add a pair: you author the input and the "
         "environment computes the output. An input the verifier cannot evaluate is "
         "refused and no pair is added; you may submit a different one.",
-    ])
+    ]
+    if stop:
+        lines.append(stop)
+    return "\n".join(lines)
 
 
 def matched_teacher_exam_message(input_grid: List[List[int]],

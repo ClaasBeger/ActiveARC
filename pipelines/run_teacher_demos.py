@@ -55,9 +55,10 @@ def _parse_args() -> argparse.Namespace:
         "--n-demos",
         type=str,
         default="auto",
-        metavar="auto|N",
+        metavar="auto|free|N",
         help="How many demonstrations the teacher must show. 'auto' uses the task's "
-        "own authored pair count, matching what the static arm is shown.",
+        "own authored pair count, matching what the static arm is shown. 'free' "
+        "lifts the cap and lets the teacher decide, recording the count it chose.",
     )
     p.add_argument(
         "--probes",
@@ -78,8 +79,12 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _n_demos_for(args: argparse.Namespace, task_id: str) -> int:
-    if str(args.n_demos).lower() == "auto":
+def _n_demos_for(args: argparse.Namespace, task_id: str):
+    """The demonstration cap, or None when the teacher sets its own."""
+    setting = str(args.n_demos).lower()
+    if setting in ("free", "none"):
+        return None
+    if setting == "auto":
         return len(load_official(args.dataset, task_id).train_pairs)
     return max(1, int(args.n_demos))
 
@@ -90,6 +95,9 @@ def _run_one(args: argparse.Namespace, task_id: str) -> dict:
         seed=args.seed, task_id=task_id, dataset=args.dataset,
     )
     session.max_demonstrations = n
+    # Still the matched arm even when the cap is lifted: the teacher authors
+    # inputs only, and show_example / start_exam stay withheld.
+    session.matched_arm = True
     session.allow_probes = bool(args.probes)
 
     effort = None if args.reasoning_effort.lower() == "none" else args.reasoning_effort
@@ -111,6 +119,7 @@ def _run_one(args: argparse.Namespace, task_id: str) -> dict:
             seed=args.seed, task_id=task_id, dataset=args.dataset,
         )
         session.max_demonstrations = n
+        session.matched_arm = True
         session.allow_probes = bool(args.probes)
 
     result = collect_teacher_demos(

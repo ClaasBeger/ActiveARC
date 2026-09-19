@@ -185,7 +185,22 @@ def collect_teacher_demos(
                           assistant_text=_assistant_text(response))
 
         if not calls:
-            remaining = (target - len(session.demonstrations)) if target else 1
+            # Unbudgeted teaching has no count to reach, so a turn with no tool
+            # call is the teacher saying it is done. Prodding it instead would
+            # leave it no way to stop short of max_turns.
+            if target is None:
+                if session.demonstrations:
+                    reason = "teacher_stopped"
+                    break
+                reminder = (
+                    "No demonstrations shown yet. Use show_transformed_input; "
+                    "text alone reaches no one."
+                )
+                log["tool_results"].append(
+                    {"name": "_protocol_reminder", "result": {"ok": False, "error": reminder}})
+                convo.extend([{"role": "user", "content": reminder}])
+                continue
+            remaining = target - len(session.demonstrations)
             reminder = (
                 f"{remaining} more demonstration(s) needed. Use show_example or "
                 "show_transformed_input; text alone reaches no one."

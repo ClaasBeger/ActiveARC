@@ -48,7 +48,14 @@ class InverseQuerySession:
     n_show_transformed: int = 0
     # Matched-K teaching: stop at exactly this many demonstrations so the set the
     # teacher hands over is the same size as the authored one the static arm gets.
+    # None means the teacher decides how many to show.
     max_demonstrations: Optional[int] = None
+    # Whether this is the matched comparison, which withholds show_example and
+    # start_exam. Kept apart from ``max_demonstrations`` because the free variant
+    # of the same arm has no cap: inferring the arm from the cap would hand an
+    # unbudgeted teacher a different tool set and quietly change the protocol.
+    # None keeps the old behaviour for callers that set only the cap.
+    matched_arm: Optional[bool] = None
     # Probing the student is off in the matched comparison: the ARC author who
     # wrote the authored demos could not question a particular learner either,
     # and the set is scored afterwards by a common evaluator, so adapting to one
