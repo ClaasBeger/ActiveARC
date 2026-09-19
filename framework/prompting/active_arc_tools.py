@@ -281,9 +281,12 @@ def _system_prompt(session: ActiveArcTrialSession) -> str:
         )
     else:
         lines.append(
-            "- Your performance will be scored based on the number of queries you "
-            "submit and whether you generate a correct output grid when you are given "
-            "a test."
+            # Neutral disclosure, not an incentive: saying queries are scored
+            # pushes the model to minimise them, which measures how few it can be
+            # pressured into rather than how many it would freely take.
+            "- You are scored on whether you generate a correct output grid when "
+            "you are given a test. The number of queries you submit will also be "
+            "recorded."
             if session.forced_queries is None
             else "- The budget is fixed, so queries cost you nothing and there is no "
             "credit for using fewer. You are scored only on whether your test output "
