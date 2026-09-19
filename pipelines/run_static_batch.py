@@ -340,11 +340,21 @@ def run_one(client, args, task_id: str) -> Dict[str, Any]:
         if "error" in rec:
             return {"task_id": task_id, "error": f"teacher run failed: {rec['error'][:120]}"}
         demos = rec.get("demonstrations") or []
-        want = len(task.train_pairs) if args.n_pairs in (None, "auto") else int(args.n_pairs)
-        if len(demos) < want:
-            return {"task_id": task_id, "error": "incomplete teacher set",
-                    "n_pairs_wanted": want, "n_pairs_got": len(demos)}
-        train_pairs = [GridPair(d["input"], d["output"]) for d in demos[:want]]
+        if str(args.n_pairs).lower() == "all":
+            # A teacher that chose its own count is the measurement, so the set
+            # is taken whole. Matching it to the authored count would reject the
+            # teachers who showed fewer and silently clip the ones who showed
+            # more -- reporting the free arm as the matched one on both sides.
+            if not demos:
+                return {"task_id": task_id, "error": "empty teacher set",
+                        "n_pairs_wanted": "all", "n_pairs_got": 0}
+            train_pairs = [GridPair(d["input"], d["output"]) for d in demos]
+        else:
+            want = len(task.train_pairs) if args.n_pairs in (None, "auto") else int(args.n_pairs)
+            if len(demos) < want:
+                return {"task_id": task_id, "error": "incomplete teacher set",
+                        "n_pairs_wanted": want, "n_pairs_got": len(demos)}
+            train_pairs = [GridPair(d["input"], d["output"]) for d in demos[:want]]
     elif args.pair_source == "generator":
         n = len(task.train_pairs) if args.n_pairs in (None, "auto") else int(args.n_pairs)
         held_out = list(task.test_inputs)
@@ -436,7 +446,11 @@ def main() -> None:
                         "rule-aware teacher chose, from --teacher-demos.")
     p.add_argument("--n-pairs", type=str, default="auto",
                    help="With --pair-source generator: how many pairs to draw "
-                        "(default 'auto' = the task's own training-pair count).")
+                        "(default 'auto' = the task's own training-pair count). "
+                        "With --pair-source teacher: 'all' hands over whatever the "
+                        "teacher produced, which is what an unbudgeted teacher run "
+                        "needs; 'auto' instead matches the authored count, erroring "
+                        "when the teacher showed fewer and clipping when it showed more.")
     p.add_argument("--seed", type=int, default=0,
                    help="Seed for generator pair sampling.")
     p.add_argument("--reasoning-effort", type=str, default="low")
