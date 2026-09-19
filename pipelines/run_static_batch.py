@@ -487,10 +487,19 @@ def main() -> None:
             rec = run_one(client, args, task_id)
             rec["elapsed_s"] = round(time.perf_counter() - started, 3)
             out_path.write_text(json.dumps(rec, indent=2), encoding="utf-8")
-            row = {"task_id": task_id, "ok": True, "correct": rec["correct"], "n_test": rec["n_test"],
-                   "n_test_correct": rec["n_test_correct"], "usage": rec["usage"], "elapsed_s": rec["elapsed_s"],
-                   "reasons": [it["reason"] for it in rec["test_items"]]}
-            status = "ok"
+            if "error" in rec:
+                # run_one reports a refusal by returning, not raising. Reading
+                # rec["correct"] on one of those raised KeyError, and the handler
+                # below then wrote that in place of the real reason -- so the
+                # record said "KeyError: 'correct'" and the cause was lost.
+                row = {"task_id": task_id, "ok": False, "error": rec["error"],
+                       "elapsed_s": rec["elapsed_s"]}
+                status = "ERROR"
+            else:
+                row = {"task_id": task_id, "ok": True, "correct": rec["correct"], "n_test": rec["n_test"],
+                       "n_test_correct": rec["n_test_correct"], "usage": rec["usage"], "elapsed_s": rec["elapsed_s"],
+                       "reasons": [it["reason"] for it in rec["test_items"]]}
+                status = "ok"
         except Exception as e:
             rec = {"task_id": task_id, "error": f"{type(e).__name__}: {e}", "traceback": traceback.format_exc(),
                    "elapsed_s": round(time.perf_counter() - started, 3)}
