@@ -381,6 +381,10 @@ def main() -> None:
         "offset": args.offset,
         "limit": args.limit,
         "per_concept_limit": args.per_concept_limit,
+        # Free interaction is the absence of --forced-k, so a run that does not
+        # record it cannot be told apart from a budgeted one after the fact.
+        "forced_k": args.forced_k,
+        "test_source": args.test_source,
         "task_ids": task_ids,
         "flags": {
             "hot_start": args.hot_start,

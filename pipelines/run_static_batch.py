@@ -465,6 +465,7 @@ def main() -> None:
     manifest = {"started_at": datetime.now(timezone.utc).isoformat(), "setting": "static", "dataset": args.dataset,
                 "model": args.model, "provider": args.provider,
                 "pair_source": args.pair_source, "n_pairs": args.n_pairs, "seed": args.seed,
+                "test_source": args.test_source, "teacher_demos": args.teacher_demos,
                 "reasoning_effort": args.reasoning_effort, "max_turns": args.max_turns,
                 "offset": args.offset, "limit": args.limit, "per_concept_limit": args.per_concept_limit,
                 "task_ids": task_ids}
