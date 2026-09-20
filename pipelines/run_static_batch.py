@@ -329,7 +329,26 @@ def run_one(client, args, task_id: str) -> Dict[str, Any]:
     task = load_official(args.dataset, task_id)
     tests = list(zip(task.test_inputs, task.test_outputs))
     train_pairs = task.train_pairs
-    if args.pair_source == "teacher":
+    if args.pairs_from_run:
+        # Replay another run's evidence so two models are compared on identical
+        # pairs. This is the only way to pair the random arm: its draw does not
+        # reproduce from the seed on P-ARC or ConceptARC, so without the stored
+        # pairs every model gets different evidence and the comparison is
+        # unpaired. Overrides --pair-source, which described how to *make* pairs.
+        from framework.grids import GridPair
+        src = Path(args.pairs_from_run) / f"{_output_basename(task_id)}.json"
+        if not src.is_file():
+            return {"task_id": task_id, "error": f"no run record at {src}"}
+        prior = json.loads(src.read_text(encoding="utf-8"))
+        if "error" in prior:
+            return {"task_id": task_id, "error": f"source run failed here: {str(prior['error'])[:120]}"}
+        pairs = prior.get("train_pairs")
+        if not pairs:
+            return {"task_id": task_id, "error": (
+                "source run stored no train_pairs; it predates evidence "
+                "persistence and cannot be replayed")}
+        train_pairs = [GridPair(p["input"], p["output"]) for p in pairs]
+    elif args.pair_source == "teacher":
         from framework.grids import GridPair
         if not args.teacher_demos:
             return {"task_id": task_id, "error": "--pair-source teacher needs --teacher-demos"}
@@ -408,7 +427,13 @@ def run_one(client, args, task_id: str) -> Dict[str, Any]:
         "provider_routing": responses_extras(
             args.provider, args.model, args.reasoning_effort
         ).get("extra_body", {}).get("provider"),
-        "n_train": len(task.train_pairs), "n_test": len(tests),
+        # The pairs actually shown, not the task's authored count -- those differ
+        # in every arm but the static one, and the record is the only place the
+        # evidence survives: a generator draw is not reproducible from the seed
+        # on P-ARC or ConceptARC, so an unrecorded draw is gone for good.
+        "n_train": len(train_pairs),
+        "train_pairs": [{"input": p.input, "output": p.output} for p in train_pairs],
+        "n_test": len(tests),
         "test_item_kinds": kinds,
         "test_item_correct": [bool(it["correct"]) for it in items],
         "n_test_correct": sum(1 for it in items if it["correct"]),
@@ -444,6 +469,16 @@ def main() -> None:
                         "number drawn at random from the task's generator -- the random "
                         "arm of the matched-K comparison. 'teacher' reads a set a "
                         "rule-aware teacher chose, from --teacher-demos.")
+    p.add_argument(
+        "--pairs-from-run",
+        type=str,
+        default=None,
+        metavar="DIR",
+        help="Replay the evidence pairs another run recorded, so a second model "
+        "sees exactly what the first did. Overrides --pair-source. The source run "
+        "must have been made after evidence persistence landed; earlier records "
+        "stored only a count and cannot be replayed.",
+    )
     p.add_argument("--n-pairs", type=str, default="auto",
                    help="With --pair-source generator: how many pairs to draw "
                         "(default 'auto' = the task's own training-pair count). "
@@ -480,6 +515,7 @@ def main() -> None:
                 "model": args.model, "provider": args.provider,
                 "pair_source": args.pair_source, "n_pairs": args.n_pairs, "seed": args.seed,
                 "test_source": args.test_source, "teacher_demos": args.teacher_demos,
+                "pairs_from_run": args.pairs_from_run,
                 "reasoning_effort": args.reasoning_effort, "max_turns": args.max_turns,
                 "offset": args.offset, "limit": args.limit, "per_concept_limit": args.per_concept_limit,
                 "task_ids": task_ids}
