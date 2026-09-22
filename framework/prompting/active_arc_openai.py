@@ -30,6 +30,7 @@ from framework.prompting.clients import (
 )
 from framework.prompting.branch_test import (
     MAX_CONSECUTIVE_STALLS,
+    MAX_TOTAL_STALLS,
     run_branched_test_chat,
 )
 from framework.prompting.response_logging import (
@@ -80,6 +81,7 @@ def run_openai_agent_loop(
 
     transcript: List[Dict[str, Any]] = []
     consecutive_stalls = 0
+    total_stalls = 0
     last_result: Dict[str, Any] = {
         "session": session,
         "transcript": transcript,
@@ -153,17 +155,24 @@ def run_openai_agent_loop(
         if stalled:
             transcript[-1]["dropped_truncated_reasoning"] = True
             consecutive_stalls += 1
+            total_stalls += 1
         else:
             messages.append(json.loads(json.dumps(msg)))
             consecutive_stalls = 0
 
-        if consecutive_stalls >= MAX_CONSECUTIVE_STALLS:
+        # A run of stalls back to back is the obvious case. The subtler one is a
+        # trial that interleaves them with real tool calls, so the consecutive
+        # count keeps resetting while the transcript fills with capped turns that
+        # produced nothing -- seventeen of them in one observed trial. Count both.
+        if consecutive_stalls >= MAX_CONSECUTIVE_STALLS or total_stalls >= MAX_TOTAL_STALLS:
             return _finish({
                 "reason": "reasoning_runaway",
                 "message": (
-                    f"{consecutive_stalls} consecutive turns hit the output cap "
-                    "while still reasoning and produced no tool call."
+                    f"{consecutive_stalls} consecutive and {total_stalls} total turns "
+                    "hit the output cap while still reasoning and produced no tool call."
                 ),
+                "consecutive_stalls": consecutive_stalls,
+                "total_stalls": total_stalls,
                 "phase": session.phase,
                 "query_count": session.query_count,
             })

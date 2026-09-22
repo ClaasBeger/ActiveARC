@@ -22,6 +22,15 @@ from framework.prompting.response_logging import summarize_response
 # active_arc_openai imports this module, so the constant cannot live there.
 MAX_CONSECUTIVE_STALLS = 3
 
+# The consecutive counter alone is not enough. A trial can alternate capped
+# silent turns with successful tool calls, resetting the run length every time
+# and never reaching three in a row -- one DeepSeek trial did this seventeen
+# times, ran for 1.9 hours and emitted 2.28M output tokens, 98% of it in turns
+# that produced nothing. So also count stalls that never reset. A healthy trial
+# has a median of zero, so this cap cannot fire on one: across 284 DeepSeek
+# ConceptARC trials, 200 had no capped turn at all.
+MAX_TOTAL_STALLS = 6
+
 
 def _item_type(item: Any) -> str:
     if isinstance(item, dict):
@@ -151,6 +160,7 @@ def run_branched_test_chat(
         messages.append({"role": "user", "content": test_phase.test_item_prompt(session, idx)})
         answered = False
         stalls = 0
+        total_stalls = 0
 
         for turn in range(max_turns):
             kwargs: Dict[str, Any] = {
@@ -184,7 +194,13 @@ def run_branched_test_chat(
             if truncated and not calls:
                 log["dropped_truncated_reasoning"] = True
                 stalls += 1
-                if stalls >= MAX_CONSECUTIVE_STALLS:
+                total_stalls += 1
+                # Two ways out: a run of stalls back to back, or enough of them
+                # spread across the item that it is plainly not converging.
+                if stalls >= MAX_CONSECUTIVE_STALLS or total_stalls >= MAX_TOTAL_STALLS:
+                    log["stall_abandoned"] = {
+                        "consecutive": stalls, "total": total_stalls,
+                    }
                     break
             else:
                 messages.append(json.loads(json.dumps(msg)))
