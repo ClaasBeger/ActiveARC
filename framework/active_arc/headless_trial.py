@@ -82,6 +82,11 @@ def _is_answer_grid(grid: Any) -> bool:
     return True
 
 
+# Wall-clock cap on one verifier call. Real verifiers answer in milliseconds;
+# anything still running after this is looping, not thinking.
+VERIFIER_CALL_TIMEOUT_S: float = 5.0
+
+
 def _run_trial_verifier(inp: Grid, verifier: Verifier) -> Grid:
     """Run the trial's pinned verifier. Raises ``RuntimeError`` if it fails.
 
@@ -95,8 +100,17 @@ def _run_trial_verifier(inp: Grid, verifier: Verifier) -> Grid:
     written against. That is not an answer, so it is treated as a failure rather
     than shown to the model.
     """
+    # Some slots do not terminate on inputs outside the shapes they were written
+    # against -- a code-golf one-liner for 150deff5 recurses forever on a mutated
+    # grid, and held a run at 100% CPU for over an hour. A verifier that never
+    # answers has not answered; the cap turns that into the same refusal a raise
+    # would. Imported here because program_eval has no business being a
+    # dependency of the trial module otherwise.
+    from framework.active_arc.program_eval import _time_limit
+
     try:
-        out = verifier(copy.deepcopy(inp))
+        with _time_limit(VERIFIER_CALL_TIMEOUT_S):
+            out = verifier(copy.deepcopy(inp))
     except Exception as e:
         raise RuntimeError(f"Trial verifier failed: {type(e).__name__}: {e}") from e
     if not _is_answer_grid(out):
