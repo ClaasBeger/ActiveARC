@@ -275,8 +275,10 @@ def _system_prompt(session: ActiveArcTrialSession) -> str:
                 "    return [row[:] for row in grid]",
                 "```",
                 "",
-                "- Your performance will be scored based on the number of queries you "
-                "submit and whether your program is correct.",
+                # Same neutral disclosure as the grid branch: saying queries are
+                # scored pushes the model to minimise them.
+                "- You are scored on whether your program is correct. The number of "
+                "queries you submit will also be recorded.",
             ]
         )
     else:
