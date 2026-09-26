@@ -324,9 +324,14 @@ class ActiveArcTrialSession:
         out: Dict[str, Any] = {
             "ok": True,
             "output_grid": clone_grid(shown),
-            "note": note,
             "query_count": self.query_count,
         }
+        # Under noisy science the note names the corruption ("(noisy: color_flip)"),
+        # which would tell the model which outputs to ignore. It stays in the history
+        # for analysis; only the model-facing result drops it. Clean runs keep "(exact)"
+        # so their prompt stream is unchanged.
+        if not self.noisy_science:
+            out["note"] = note
         if matched_test_round is not None:
             out["queried_shown_test_input"] = True
             out["matched_test_round"] = matched_test_round
